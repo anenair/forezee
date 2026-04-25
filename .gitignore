@@ -1,0 +1,54 @@
+# ============================================================
+# Forzee — .gitignore
+# ============================================================
+
+# ── Secrets ──────────────────────────────────────────────────
+# NEVER commit API keys
+Secrets.xcconfig
+
+# ── Xcode ────────────────────────────────────────────────────
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+build/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+# ── Swift Package Manager ─────────────────────────────────────
+.build/
+Packages/
+Package.resolved
+*.resolved
+
+# ── macOS ────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ── CocoaPods (not used — using SPM) ─────────────────────────
+Pods/
+Podfile.lock
+
+# ── Fastlane ─────────────────────────────────────────────────
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# ── Misc ─────────────────────────────────────────────────────
+*.log
+.env

@@ -1,0 +1,82 @@
+// ============================================================
+// WorkoutGenerationPrompt.swift
+// Forzee — Core/AI
+//
+// Builds the user message prompt for Kai's workout generator.
+// The response is parsed by WorkoutParser into a GeneratedWorkout.
+//
+// Claude is instructed to return a strict JSON schema so the
+// iOS app can decode and render the workout reliably.
+// ============================================================
+
+import Foundation
+
+enum WorkoutGenerationPrompt {
+
+    static func build(context: UserContextSnapshot, preferences: WorkoutPreferences?) -> String {
+        var prompt = """
+        Generate an adaptive workout for this user based on their context.
+
+        Requirements:
+        - Use only the equipment they have available
+        - Respect any limitations or injuries
+        - Match the session to their fitness level and goals
+        - Account for their recent training load (avoid overtraining)
+        """
+
+        if let prefs = preferences {
+            if let duration = prefs.durationMinutes {
+                prompt += "\n- Target duration: \(duration) minutes"
+            }
+            if let muscles = prefs.focusMuscleGroups, !muscles.isEmpty {
+                prompt += "\n- Focus on: \(muscles.joined(separator: ", "))"
+            }
+            if let intensity = prefs.intensityOverride {
+                prompt += "\n- Intensity override: \(intensity)"
+            }
+        }
+
+        prompt += """
+
+
+        Return ONLY valid JSON in this exact schema:
+        {
+          "name": "Workout name",
+          "workout_type": "strength|cardio|mobility|hiit|recovery",
+          "estimated_duration_mins": 45,
+          "coaching_note": "A one or two sentence note from Kai explaining why this workout fits the user today.",
+          "exercises": [
+            {
+              "name": "Exercise Name",
+              "sets": 3,
+              "reps": "8-12",
+              "weight_kg": null,
+              "rest_secs": 90,
+              "notes": "Optional form cue or coaching note for this exercise."
+            }
+          ]
+        }
+
+        Do not include any prose before or after the JSON.
+        """
+
+        return prompt
+    }
+}
+
+// MARK: - DailyBriefingPrompt
+
+enum DailyBriefingPrompt {
+
+    static func build(context: UserContextSnapshot) -> String {
+        return """
+        Generate today's morning briefing for this user.
+
+        Keep it short — 2-3 sentences maximum. Warm but not over-the-top.
+        Reference their context naturally if relevant (e.g. last session, goals).
+        End with one clear, actionable suggestion for today.
+
+        No greetings like "Good morning!" — just start with the substance.
+        """
+    }
+}

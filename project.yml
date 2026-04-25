@@ -1,0 +1,70 @@
+# ============================================================
+# Forzee — XcodeGen Project Configuration
+# Run `make generate` to regenerate the .xcodeproj from this file
+# ============================================================
+
+name: Forzee
+
+options:
+  bundleIdPrefix: com.forzee
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    PRODUCT_BUNDLE_IDENTIFIER: com.forzee.app
+
+targets:
+  Forzee:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Forzee
+    configFiles:
+      Debug: Secrets.xcconfig
+      Release: Secrets.xcconfig
+    settings:
+      base:
+        INFOPLIST_FILE: Forzee/Resources/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+    info:
+      path: Forzee/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Forzee
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchStoryboardName: ""
+        NSHealthShareUsageDescription: "Forzee uses your health data to help Kai personalise your coaching."
+        NSHealthUpdateUsageDescription: "Forzee logs your workouts to Apple Health."
+        NSMicrophoneUsageDescription: "Forzee uses your microphone for voice conversations with Kai."
+        NSSpeechRecognitionUsageDescription: "Forzee uses speech recognition so you can talk to Kai hands-free."
+        NSCalendarsUsageDescription: "Forzee reads your calendar so Kai can plan workouts around your schedule."
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    dependencies:
+      - package: Supabase
+      - package: RevenueCat
+
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: "2.0.0"
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios
+    from: "5.0.0"
