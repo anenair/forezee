@@ -1,0 +1,162 @@
+// ============================================================
+// SettingsView.swift
+// Forzee — Features/Settings
+//
+// Phase 2: subscription status + upgrade entry point, Phase 2
+// integration status (Health/Calendar/Location), and sign out.
+// Replaces the Settings tab placeholder.
+// ============================================================
+
+import SwiftUI
+
+struct SettingsView: View {
+
+    @EnvironmentObject private var appState: AppState
+    @ObservedObject private var healthKit = HealthKitManager.shared
+    @ObservedObject private var calendar = CalendarManager.shared
+    @ObservedObject private var weather = WeatherManager.shared
+
+    @State private var showPaywall = false
+    @State private var isSigningOut = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.fzBg.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: ForzeeSpacing.sectionGap) {
+                        subscriptionCard
+                        integrationsCard
+                        signOutButton
+                    }
+                    .padding(ForzeeSpacing.screenPadding)
+                }
+            }
+            .navigationTitle("Settings")
+            .task {
+                await PurchaseManager.shared.refreshCustomerInfo(userId: appState.userId)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
+            }
+        }
+    }
+
+    // MARK: - Subscription
+
+    private var subscriptionCard: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(appState.subscriptionTier.displayName)
+                        .font(.fzBody(16, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                    Text(appState.subscriptionTier.isPremium
+                         ? "Unlimited coaching & full context awareness"
+                         : "3 messages/day, 1 workout/week")
+                        .font(.fzBody(13))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                Spacer()
+                if appState.subscriptionTier.isPremium {
+                    Image(systemName: "crown.fill").foregroundStyle(Color.fzPrimary)
+                }
+            }
+
+            if appState.subscriptionTier.isFree {
+                ForzeeButton(title: "Upgrade to Premium") { showPaywall = true }
+            }
+        }
+        .padding(ForzeeSpacing.cardPadding)
+        .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
+    }
+
+    // MARK: - Integrations
+
+    private var integrationsCard: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
+            Text("Life Signals")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+
+            IntegrationRow(iconName: "heart.fill", iconColor: .fzCoral, title: "Apple Health", isOn: healthKit.isAuthorized) {
+                Task { await HealthKitManager.shared.requestAuthorization() }
+            }
+            IntegrationRow(iconName: "calendar", iconColor: .fzPrimary, title: "Calendar", isOn: calendar.isAuthorized) {
+                Task { await CalendarManager.shared.requestAccess() }
+            }
+            IntegrationRow(iconName: "location.fill", iconColor: .fzPrimary, title: "Weather & Location", isOn: weather.isAuthorized) {
+                WeatherManager.shared.requestAuthorization()
+            }
+        }
+        .padding(ForzeeSpacing.cardPadding)
+        .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
+    }
+
+    // MARK: - Sign Out
+
+    private var signOutButton: some View {
+        Button {
+            Task {
+                isSigningOut = true
+                await appState.signOut()
+                isSigningOut = false
+            }
+        } label: {
+            Text("Sign Out")
+                .font(.fzBody(15, weight: .semibold))
+                .foregroundStyle(Color.fzPink)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+        }
+        .disabled(isSigningOut)
+    }
+}
+
+// MARK: - IntegrationRow
+
+private struct IntegrationRow: View {
+    let iconName: String
+    let iconColor: Color
+    let title: String
+    let isOn: Bool
+    let onEnable: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+                .frame(width: 20)
+            Text(title)
+                .font(.fzBody(14))
+                .foregroundStyle(Color.fzText)
+            Spacer()
+            if isOn {
+                Text("Connected")
+                    .font(.fzBody(12, weight: .medium))
+                    .foregroundStyle(Color.fzGreen)
+            } else {
+                Button("Connect", action: onEnable)
+                    .font(.fzBody(12, weight: .medium))
+                    .foregroundStyle(Color.fzPrimary)
+            }
+        }
+    }
+}
+
+#Preview {
+    SettingsView()
+        .environmentObject(AppState())
+}

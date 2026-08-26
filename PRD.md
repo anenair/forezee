@@ -88,17 +88,20 @@ An AI coach powered by Claude API that reasons over a full life-signal pipeline:
 ### Phase 2 — Context Awareness
 **Goal:** Does the app feel like it knows your life?
 
-- [ ] Apple HealthKit integration (steps, active calories, workouts)
-- [ ] Apple Watch support (WatchOS app)
-- [ ] Sleep data integration (duration, quality, consistency)
-- [ ] HRV / recovery signal integration
-- [ ] Calendar integration (EventKit) — busy days, travel, schedule shifts
-- [ ] Weather integration (CoreLocation + WeatherKit) — indoor/outdoor workout routing
-- [ ] Stress / mindfulness signals (HealthKit)
-- [ ] Nutrition / meal tracking
-- [ ] AI proactive daily briefing — surfaces recommendations before user opens app
-- [ ] AI adapts workouts based on all signals passively (zero manual input)
-- [ ] Premium paywall (RevenueCat)
+- [x] Apple HealthKit integration (steps, active calories, workouts) — read-only signals wired into ContextBuilder
+- [ ] Apple Watch support (WatchOS app) — needs its own Xcode target; deferred
+- [x] Sleep data integration (duration, quality, consistency) — 7-day average from HealthKit
+- [x] HRV / recovery signal integration — trend classification (declining/stable/improving)
+- [x] Calendar integration (EventKit) — busy days, travel, schedule shifts
+- [x] Weather integration (CoreLocation + WeatherKit) — indoor/outdoor workout routing
+- [x] Stress / mindfulness signals (HealthKit) — mindful minutes as proxy
+- [x] Nutrition / meal tracking — manual macro logging + today's summary
+- [x] AI proactive daily briefing — surfaces recommendations before user opens app
+- [x] AI adapts workouts based on all signals passively (zero manual input) — full signal bundle now in every context snapshot
+- [x] Premium paywall (RevenueCat) — offerings, purchase, restore, entitlement sync
+
+Unbuilt/unverified: WatchOS app (Phase 3 hardware integrations — Whoop, Garmin — remain untouched).
+None of this has been build-verified (no Xcode/Swift toolchain in this environment) — run `make generate && make build` on macOS.
 
 ### Phase 3 — Full Ecosystem
 **Goal:** Revenue, retention, and platform expansion

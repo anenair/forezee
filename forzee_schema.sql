@@ -191,6 +191,31 @@ create table public.context_signals (
 );
 
 -- ============================================================
+-- NUTRITION LOGS
+-- Phase 2: manually logged meals feed today's macro summary
+-- into the AI context snapshot and the Progress tab.
+-- ============================================================
+create table public.nutrition_logs (
+  id uuid default uuid_generate_v4() primary key,
+  logged_at timestamp with time zone default now(),
+
+  user_id uuid references public.profiles(id) on delete cascade,
+
+  -- Meal type: breakfast | lunch | dinner | snack
+  meal_type text not null default 'snack',
+
+  calories int not null default 0,
+  protein_g int not null default 0,
+  carbs_g int not null default 0,
+  fat_g int not null default 0,
+
+  notes text
+);
+
+create index idx_nutrition_user_logged_at
+  on public.nutrition_logs(user_id, logged_at);
+
+-- ============================================================
 -- COACH MESSAGES
 -- Chat history between user and AI coach
 -- ============================================================
@@ -319,6 +344,7 @@ alter table public.context_signals enable row level security;
 alter table public.coach_messages enable row level security;
 alter table public.progress_photos enable row level security;
 alter table public.personal_records enable row level security;
+alter table public.nutrition_logs enable row level security;
 
 -- Profiles
 create policy "Users can view own profile"
@@ -355,6 +381,10 @@ create policy "Users can manage own photos"
 -- Personal Records
 create policy "Users can manage own PRs"
   on public.personal_records for all using (auth.uid() = user_id);
+
+-- Nutrition Logs
+create policy "Users can manage own nutrition logs"
+  on public.nutrition_logs for all using (auth.uid() = user_id);
 
 -- Exercises are public read
 alter table public.exercises enable row level security;

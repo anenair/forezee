@@ -18,6 +18,13 @@ import Combine
 @MainActor
 final class AppState: ObservableObject {
 
+    // MARK: - Shared Reference
+
+    /// Weak reference to the live instance so singleton services (PurchaseManager,
+    /// etc.) can push updates without being threaded through the view hierarchy.
+    /// Set once in `init()` — there is only ever one AppState per app run.
+    static private(set) weak var shared: AppState?
+
     // MARK: - Auth
 
     /// Whether the user has an active, verified Supabase session.
@@ -51,6 +58,7 @@ final class AppState: ObservableObject {
     // MARK: - Init
 
     init() {
+        Self.shared = self
         restoreSession()
     }
 

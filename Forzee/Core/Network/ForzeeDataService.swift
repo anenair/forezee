@@ -146,6 +146,77 @@ final class ForzeeDataService {
             .execute()
     }
 
+    // MARK: - Context Signals (Phase 2)
+
+    /// Persist a life signal (sleep, HRV, steps, stress, calendar, weather) for trend history.
+    /// Best-effort — callers should treat failures as non-fatal.
+    func insertContextSignal(_ signal: ContextSignal) async throws {
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(signal)
+        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+        try await client
+            .from("context_signals")
+            .insert(dict)
+            .execute()
+    }
+
+    /// Fetch recent history for a single signal type, most recent first.
+    func fetchContextSignals(
+        userId: String,
+        signalType: ContextSignal.SignalType,
+        limit: Int = 30
+    ) async throws -> [ContextSignal] {
+        let response = try await client
+            .from("context_signals")
+            .select()
+            .eq("user_id", value: userId)
+            .eq("signal_type", value: signalType.rawValue)
+            .order("recorded_at", ascending: false)
+            .limit(limit)
+            .execute()
+
+        return try JSONDecoder().decode([ContextSignal].self, from: response.data)
+    }
+
+    // MARK: - Nutrition (Phase 2)
+
+    /// Save a manually logged meal.
+    func saveNutritionEntry(_ entry: NutritionEntry) async throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(entry)
+        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+        try await client
+            .from("nutrition_logs")
+            .insert(dict)
+            .execute()
+    }
+
+    /// Fetch and aggregate today's logged nutrition for the context snapshot and Progress tab.
+    func fetchNutritionToday(userId: String) async throws -> NutritionSummary {
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        let formatter = ISO8601DateFormatter()
+
+        let response = try await client
+            .from("nutrition_logs")
+            .select()
+            .eq("user_id", value: userId)
+            .gte("logged_at", value: formatter.string(from: startOfDay))
+            .execute()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let entries = try decoder.decode([NutritionEntry].self, from: response.data)
+
+        return NutritionSummary(
+            totalCalories: entries.reduce(0) { $0 + $1.calories },
+            totalProteinG: entries.reduce(0) { $0 + $1.proteinG },
+            entryCount: entries.count
+        )
+    }
+
     // MARK: - Usage Tracking
 
     /// Insert a usage record for cost monitoring and free-tier enforcement.

@@ -15,7 +15,7 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $appState.activeTab) {
             // ── Coach Tab ──────────────────────────────────────
-            CoachPlaceholderView()
+            CoachView()
                 .tabItem {
                     Label(AppTab.coach.title, systemImage: AppTab.coach.iconName)
                 }
@@ -29,14 +29,14 @@ struct MainTabView: View {
                 .tag(AppTab.workout)
 
             // ── Progress Tab ───────────────────────────────────
-            ProgressPlaceholderView()
+            ProgressTabView()
                 .tabItem {
                     Label(AppTab.progress.title, systemImage: AppTab.progress.iconName)
                 }
                 .tag(AppTab.progress)
 
             // ── Settings Tab ───────────────────────────────────
-            SettingsPlaceholderView()
+            SettingsView()
                 .tabItem {
                     Label(AppTab.settings.title, systemImage: AppTab.settings.iconName)
                 }
@@ -45,40 +45,13 @@ struct MainTabView: View {
     }
 }
 
-// MARK: - Tab Placeholders (replaced screen by screen as .pen diagrams land)
-
-private struct CoachPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Kai Coach Interface")
-                .navigationTitle("Coach")
-        }
-    }
-}
+// MARK: - Workout Placeholder (replaced once Phase 1 workout UI lands)
 
 private struct WorkoutPlaceholderView: View {
     var body: some View {
         NavigationStack {
             Text("Workout")
                 .navigationTitle("Workout")
-        }
-    }
-}
-
-private struct ProgressPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Progress")
-                .navigationTitle("Progress")
-        }
-    }
-}
-
-private struct SettingsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Settings")
-                .navigationTitle("Settings")
         }
     }
 }

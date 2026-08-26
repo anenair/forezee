@@ -7,6 +7,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Phase 2: Context Awareness (2026-08-26)
+
+**The life-signal pipeline**
+- `Integrations/HealthKit/HealthKitManager.swift` — steps, active calories, 7-day sleep average, HRV trend (7d vs prior 7d), mindful minutes (stress proxy). Read-only, single authorization prompt for all types.
+- `Integrations/Calendar/CalendarManager.swift` — EventKit; classifies today as `free` / `busy_morning` / `busy_afternoon` / `busy_all_day` / `travel` from event load and keyword detection.
+- `Integrations/Weather/WeatherManager.swift` — CoreLocation + WeatherKit; current conditions plus an `outdoorFriendly` flag (temp/wind/condition thresholds) for indoor/outdoor workout routing.
+- `Core/Models/ContextSignal.swift` — maps to `context_signals`; every signal ContextBuilder reads is now also persisted for trend history.
+- `ForzeeDataService` — `insertContextSignal`, `fetchContextSignals`, `saveNutritionEntry`, `fetchNutritionToday`.
+- `ContextBuilder.swift` — rewritten to assemble all Phase 2 signals in parallel alongside the Phase 1 profile/workout fetch, write-through to `context_signals`, and expand `UserContextSnapshot.RecentContext` with `stepsToday`, `stressMinutesToday`, `weatherCondition`, `outdoorFriendly`, `nutritionToday`. Every source degrades to `nil` on missing authorization — Kai never blocks on an absent signal.
+- `OnboardingPermissionsView` — "Grant All" now actually calls `HealthKitManager`/`CalendarManager`/`WeatherManager` instead of the Phase 1 stub that just flipped toggles.
+
+**Nutrition**
+- `Core/Models/NutritionEntry.swift` + `nutrition_logs` table (schema + RLS) — manual meal logging (calories/protein/carbs/fat).
+- `Features/Progress/ProgressTabView.swift` — today's macro summary + a log-a-meal sheet. Replaces the Progress tab placeholder. (Progress photos, PRs, and charts are still open Phase 1 items.)
+
+**Premium paywall**
+- `Core/Billing/PurchaseManager.swift` — RevenueCat wrapper: offerings, purchase, restore, and a `PurchasesDelegate` that syncs the `premium` entitlement into `AppState.subscriptionTier` and `profiles.subscription_tier`.
+- `Features/Settings/PaywallView.swift`, `Features/Settings/SettingsView.swift` — replaces the Settings placeholder with subscription status, upgrade sheet, per-integration connect rows, and sign out.
+- `AppState.shared` — weak static reference so singleton services can push state without being threaded through the view hierarchy.
+
+**Coach**
+- `Features/Coach/CoachView.swift` — replaces the Coach placeholder with the Phase 1 chat interface plus a Phase 2 proactive daily briefing card, powered by the now-context-aware `KaiEngine`.
+
+**Config**
+- `project.yml` — `Forzee.entitlements` (HealthKit + WeatherKit), `NSLocationWhenInUseUsageDescription`.
+- `forzee_schema.sql` — `nutrition_logs` table, index, and RLS policy.
+
+**Not in this pass** — WatchOS app and Whoop/Garmin integrations (Phase 2/3 PRD items) need their own Xcode target and hardware to validate; deferred rather than shipped unverifiable. This environment has no Xcode/Swift toolchain, so none of the above has been build-verified — run `make generate && make build` on macOS before merging.
+
 ### Added — Git workflow Makefile targets (2026-04-25)
 
 - `make commit MSG="..."` — stage all changes and commit with the given message
