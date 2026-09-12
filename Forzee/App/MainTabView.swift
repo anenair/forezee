@@ -22,7 +22,7 @@ struct MainTabView: View {
                 .tag(AppTab.coach)
 
             // ── Workout Tab ────────────────────────────────────
-            WorkoutPlaceholderView()
+            WorkoutTabView()
                 .tabItem {
                     Label(AppTab.workout.title, systemImage: AppTab.workout.iconName)
                 }
@@ -41,17 +41,6 @@ struct MainTabView: View {
                     Label(AppTab.settings.title, systemImage: AppTab.settings.iconName)
                 }
                 .tag(AppTab.settings)
-        }
-    }
-}
-
-// MARK: - Workout Placeholder (replaced once Phase 1 workout UI lands)
-
-private struct WorkoutPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Workout")
-                .navigationTitle("Workout")
         }
     }
 }

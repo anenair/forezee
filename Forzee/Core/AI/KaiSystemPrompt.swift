@@ -33,6 +33,13 @@ enum KaiSystemPrompt {
         """
     }
 
+    // MARK: - Lightweight Variant
+
+    /// Identity only, no philosophy/tone/context injection. Used for the
+    /// gym companion comment — that call needs to be small and fast, not
+    /// a full system prompt round-trip while the user is resting between sets.
+    static let identityOnly = identity
+
     // MARK: - Identity
 
     private static let identity = """

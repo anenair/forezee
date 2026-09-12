@@ -31,16 +31,18 @@ final class TaskClassifier {
     /// Classify a task type enum directly (used for non-chat tasks).
     func classify(taskType: KaiTaskType) -> KaiModel {
         switch taskType {
-        case .chatMessage:       return .sonnet  // Default chat → Sonnet (can override per message)
-        case .workoutGeneration: return .sonnet
-        case .recoveryAdvice:    return .sonnet
-        case .periodization:     return .sonnet
-        case .insightGeneration: return .sonnet
-        case .logging:           return .haiku
-        case .confirmation:      return .haiku
-        case .simpleQA:          return .haiku
-        case .notification:      return .haiku
-        case .dailyBriefing:     return .haiku
+        case .chatMessage:          return .sonnet  // Coaching chat — conversational depth
+        case .workoutGeneration:    return .sonnet
+        case .workoutReport:        return .sonnet  // Post-workout report — quality + format reliability
+        case .recoveryAdvice:       return .sonnet
+        case .periodization:        return .sonnet
+        case .insightGeneration:    return .sonnet
+        case .logging:              return .haiku
+        case .confirmation:         return .haiku
+        case .simpleQA:             return .haiku
+        case .notification:         return .haiku
+        case .dailyBriefing:        return .haiku
+        case .gymCompanionComment:  return .haiku  // Live in-workout remarks — speed + cost
         }
     }
 
@@ -73,14 +75,16 @@ enum KaiTaskType: String, Codable {
     // Sonnet tasks
     case chatMessage       = "chat_message"
     case workoutGeneration = "workout_generation"
+    case workoutReport     = "workout_report"
     case recoveryAdvice    = "recovery_advice"
     case periodization     = "periodization"
     case insightGeneration = "insight_generation"
 
     // Haiku tasks
-    case logging           = "logging"
-    case confirmation      = "confirmation"
-    case simpleQA          = "simple_qa"
-    case notification      = "notification"
-    case dailyBriefing     = "daily_briefing"
+    case logging             = "logging"
+    case confirmation        = "confirmation"
+    case simpleQA            = "simple_qa"
+    case notification        = "notification"
+    case dailyBriefing       = "daily_briefing"
+    case gymCompanionComment = "gym_companion_comment"
 }

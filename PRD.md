@@ -78,7 +78,7 @@ An AI coach powered by Claude API that reasons over a full life-signal pipeline:
 - [ ] AI coach — chat interface
 - [ ] AI coach — smart daily suggestions (no chat required)
 - [ ] Voice-guided workouts
-- [ ] Adaptive workout generator (bodyweight → advanced powerlifting / periodization)
+- [x] Adaptive workout generator (bodyweight → advanced powerlifting / periodization) — generate/check-off/log loop built; periodization across sessions not yet tracked
 - [ ] Coaching tone adapts to user level (encouraging for novice, technical for advanced)
 - [ ] Form guidance & education layer (critical for novice safety)
 - [ ] Exercise database / workout library

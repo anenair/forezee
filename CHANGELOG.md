@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Workout tab + gym companion (2026-09-12)
+
+- `Features/Workout/WorkoutTabView.swift` — replaces the Workout tab placeholder. Generate today's workout via `KaiEngine.generateWorkout`, check off exercises as they're done, finish to log the session and get a Sonnet-written post-workout report. Completion is tracked per exercise, not per set, for this first pass.
+- `ForzeeDataService.saveCompletedWorkout` — persists the generated plan to `workouts` and the completion log to `sessions`.
+- **Gym companion comments** — a short Haiku-generated remark fires after each exercise is checked off. Deliberately skips the full HealthKit/EventKit/WeatherKit context snapshot so it comes back fast between sets.
+- **Model routing, made explicit**: gym companion comments → Haiku (speed + cost), workout reports → Sonnet (quality + format reliability), coaching chat → Sonnet (conversational depth, already the default). Added `gymCompanionComment` and `workoutReport` to `KaiTaskType`/`TaskClassifier`.
+
 ### Added — Phase 2: Context Awareness (2026-08-26)
 
 **The life-signal pipeline**

@@ -217,6 +217,72 @@ final class ForzeeDataService {
         )
     }
 
+    // MARK: - Workouts (Phase 1 — logging)
+
+    /// Persists a Kai-generated workout as completed, along with which
+    /// exercises the user checked off during the session. Two inserts:
+    /// `workouts` (the plan + context snapshot at generation time) and
+    /// `sessions` (the completion record).
+    func saveCompletedWorkout(
+        _ workout: GeneratedWorkout,
+        completedExerciseIds: Set<UUID>,
+        userId: String
+    ) async throws {
+        let workoutRecord = WorkoutInsertRecord(
+            id: workout.id.uuidString,
+            userId: userId,
+            name: workout.name,
+            workoutType: workout.workoutType,
+            estimatedDurationMins: workout.estimatedDurationMins,
+            contextSnapshot: workout.contextSnapshot,
+            status: "completed",
+            exercises: workout.exercises
+        )
+        try await insert(workoutRecord, into: "workouts")
+
+        let sessionRecord = SessionInsertRecord(
+            userId: userId,
+            workoutId: workout.id.uuidString,
+            durationMins: workout.estimatedDurationMins,
+            setsLog: workout.exercises
+                .filter { completedExerciseIds.contains($0.id) }
+                .map { CompletedExerciseLog(exerciseName: $0.name, setsCompleted: $0.sets) }
+        )
+        try await insert(sessionRecord, into: "sessions")
+    }
+
+    private func insert<T: Encodable>(_ record: T, into table: String) async throws {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(record)
+        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+        try await client.from(table).insert(dict).execute()
+    }
+
+    private struct WorkoutInsertRecord: Encodable {
+        let id: String
+        let userId: String
+        let name: String
+        let workoutType: String
+        let estimatedDurationMins: Int
+        let contextSnapshot: UserContextSnapshot?
+        let status: String
+        let exercises: [WorkoutExercise]
+    }
+
+    private struct SessionInsertRecord: Encodable {
+        let userId: String
+        let workoutId: String
+        let durationMins: Int
+        let setsLog: [CompletedExerciseLog]
+    }
+
+    private struct CompletedExerciseLog: Encodable {
+        let exerciseName: String
+        let setsCompleted: Int
+    }
+
     // MARK: - Usage Tracking
 
     /// Insert a usage record for cost monitoring and free-tier enforcement.

@@ -175,6 +175,69 @@ final class KaiEngine: ObservableObject {
         return response
     }
 
+    /// A short, live remark fired when the user checks off an exercise mid-workout.
+    /// Haiku, no context snapshot — this needs to land while someone's resting
+    /// between sets at the gym, not after a HealthKit/EventKit/WeatherKit round-trip.
+    func generateGymCompanionComment(
+        userId: String,
+        exerciseName: String,
+        fitnessLevel: String
+    ) async throws -> String {
+        let model = KaiModel.haiku
+        let prompt = GymCompanionCommentPrompt.build(exerciseName: exerciseName, fitnessLevel: fitnessLevel)
+
+        let response = try await apiClient.complete(
+            model: model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt
+        )
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .gymCompanionComment,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: response.estimatedTokenCount
+        )
+
+        return response
+    }
+
+    /// A short report after the user finishes a workout — what they actually
+    /// did vs. what was prescribed, plus one thing to focus on next time.
+    /// Sonnet — needs to reason over the full context snapshot, same as generation.
+    func generateWorkoutReport(
+        userId: String,
+        workout: GeneratedWorkout,
+        completedExerciseNames: [String]
+    ) async throws -> String {
+        try await usageGate.checkLimit(userId: userId, taskType: .workoutReport)
+
+        let context = await contextBuilder.buildSnapshot(userId: userId)
+        let model = KaiModel.sonnet
+        let prompt = WorkoutReportPrompt.build(
+            context: context,
+            workout: workout,
+            completedExerciseNames: completedExerciseNames
+        )
+
+        let response = try await apiClient.complete(
+            model: model,
+            systemPrompt: KaiSystemPrompt.build(context: context),
+            userMessage: prompt
+        )
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .workoutReport,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: response.estimatedTokenCount
+        )
+
+        return response
+    }
+
     // MARK: - Private Helpers
 
     private func assembleMessages(

@@ -80,3 +80,46 @@ enum DailyBriefingPrompt {
         """
     }
 }
+
+// MARK: - GymCompanionCommentPrompt
+
+/// Fires live, mid-workout — the user just checked off an exercise at the gym.
+/// Deliberately skips the full context snapshot: this needs to come back fast
+/// while someone's resting between sets, not after a round-trip through
+/// HealthKit/EventKit/WeatherKit.
+enum GymCompanionCommentPrompt {
+
+    static func build(exerciseName: String, fitnessLevel: String) -> String {
+        return """
+        The user, a \(fitnessLevel)-level trainee, just finished "\(exerciseName)".
+
+        React in ONE short sentence — under 12 words. A real coach standing next \
+        to them between sets, not a chatbot. No exclamation-point spam, no generic \
+        hype. Vary it — not the same phrase every time.
+        """
+    }
+}
+
+// MARK: - WorkoutReportPrompt
+
+enum WorkoutReportPrompt {
+
+    static func build(
+        context: UserContextSnapshot,
+        workout: GeneratedWorkout,
+        completedExerciseNames: [String]
+    ) -> String {
+        let skipped = workout.exercises.map(\.name).filter { !completedExerciseNames.contains($0) }
+
+        return """
+        The user just finished this workout: "\(workout.name)" (\(workout.workoutType)).
+
+        Completed: \(completedExerciseNames.isEmpty ? "none logged" : completedExerciseNames.joined(separator: ", "))
+        Skipped: \(skipped.isEmpty ? "none" : skipped.joined(separator: ", "))
+
+        Write a short post-workout report — 3-4 sentences. Acknowledge what they \
+        actually did (not what was prescribed), note anything skipped without \
+        guilt-tripping, and end with one specific thing to focus on next session.
+        """
+    }
+}
