@@ -99,6 +99,7 @@ final class AppState: ObservableObject {
 
     func signOut() async {
         await ForzeeDataService.shared.signOut()
+        NotificationManager.shared.cancelAll()
         isAuthenticated = false
         userId = nil
         userProfile = nil

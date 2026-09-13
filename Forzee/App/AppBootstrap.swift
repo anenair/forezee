@@ -20,6 +20,10 @@ enum AppBootstrap {
         // registered before any StoreKit transaction can arrive — waiting
         // for the Settings tab to lazily init it would risk missing one.
         _ = PurchaseManager.shared
+        // Same reasoning for NotificationManager — a cold launch from
+        // tapping a notification needs its UNUserNotificationCenterDelegate
+        // registered before that delegate callback fires.
+        _ = NotificationManager.shared
         // Supabase client is configured lazily in ForzeeDataService.shared
     }
 

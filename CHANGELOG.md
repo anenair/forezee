@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Local notification system (2026-09-13)
+
+- `Core/Notifications/NotificationManager.swift` — local notifications only, no APNs/server. Two kinds:
+  - **Workout reminders**: recurring, one per training day picked in onboarding, at roughly the preferred time of day. Scheduled once onboarding completes.
+  - **Re-engagement nudge**: rescheduled on every app foreground (`ForzeeApp`'s `scenePhase` — cancel pending, schedule a fresh one N days out); if the user doesn't reopen the app in time, it fires. This is what closes the gap Coach Mode: Accountability called out when it shipped — it can now actually reach the user outside the app. Advisory mode never schedules one; Guided gets a gentle 3-day nudge, Accountability a sharper 1-day one.
+- Added as a 5th onboarding permission row (Notifications), and a Settings row to enable it later — though Settings can only default reminders to "morning" since onboarding's preferred time-of-day was never persisted to the profile (a pre-existing gap, not something this pass introduced).
+- Tapping any notification opens the Coach tab.
+- Cancelled entirely on sign out.
+- **Not attempted**: server-driven push (APNs) for content computed server-side (e.g. "your HRV crashed, skip today") — that needs a backend component (device token storage, an APNs key, something to trigger sends) and is real, separate scope.
+
 ### Added — Voice chat: "Hi Kai" wake phrase (2026-09-13)
 
 - `Integrations/Voice/VoiceManager.swift` — Speech + AVAudioEngine wake-phrase detection ("Hi Kai" / "Hey Kai") and speech-to-text, on-device recognition when the device supports it.

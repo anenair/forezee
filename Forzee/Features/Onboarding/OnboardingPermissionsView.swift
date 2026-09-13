@@ -6,18 +6,20 @@
 //
 // Layout:
 //   - "Forzee works best with access to:" heading (28pt)
-//   - 4 permission rows with toggles:
+//   - 5 permission rows with toggles:
 //       1. Apple Health   (coral heart-pulse icon) — toggle default ON
 //       2. Sleep Data     (primary moon icon)       — toggle default ON
 //       3. Calendar       (primary calendar icon)   — toggle default OFF
 //       4. Location       (primary map-pin icon)    — toggle default OFF
+//       5. Notifications  (primary bell icon)       — toggle default OFF
 //   - Spacer (fill)
 //   - "Grant All" primary button
 //   - "Set up later" text link
 //
 // Tapping "Grant All" requests system permissions via HealthKit /
-// EventKit / CoreLocation, wired to the Phase 2 integration managers.
-// Toggles reflect what the system actually granted, not just intent.
+// EventKit / CoreLocation / UNUserNotificationCenter, wired to the
+// Phase 2 integration managers. Toggles reflect what the system
+// actually granted, not just intent.
 // ============================================================
 
 import SwiftUI
@@ -76,6 +78,13 @@ struct OnboardingPermissionsView: View {
                             subtitle: "Find gyms and outdoor routes nearby",
                             isOn: $viewModel.locationGranted
                         )
+                        PermissionRow(
+                            iconName: "bell.fill",
+                            iconColor: Color.fzPrimary,
+                            title: "Notifications",
+                            subtitle: "Workout reminders and check-ins from Kai",
+                            isOn: $viewModel.notificationsGranted
+                        )
                     }
                     .frame(maxHeight: .infinity)
 
@@ -110,6 +119,8 @@ struct OnboardingPermissionsView: View {
         // so we reflect the toggle optimistically; buildRecentContext degrades
         // gracefully to nil if the user ultimately denies it.
         viewModel.locationGranted = true
+
+        viewModel.notificationsGranted = await NotificationManager.shared.requestAuthorization()
 
         isRequesting = false
         onGrantAll()

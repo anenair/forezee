@@ -15,6 +15,7 @@ struct SettingsView: View {
     @ObservedObject private var healthKit = HealthKitManager.shared
     @ObservedObject private var calendar = CalendarManager.shared
     @ObservedObject private var weather = WeatherManager.shared
+    @ObservedObject private var notifications = NotificationManager.shared
 
     @State private var showPaywall = false
     @State private var isSigningOut = false
@@ -38,6 +39,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task {
                 await PurchaseManager.shared.refreshCustomerInfo(userId: appState.userId)
+                await NotificationManager.shared.refreshAuthorizationStatus()
                 if let saved = appState.userProfile?.coachMode, let mode = CoachMode(rawValue: saved) {
                     coachMode = mode
                 }
@@ -150,6 +152,17 @@ struct SettingsView: View {
             }
             IntegrationRow(iconName: "location.fill", iconColor: .fzPrimary, title: "Weather & Location", isOn: weather.isAuthorized) {
                 WeatherManager.shared.requestAuthorization()
+            }
+            IntegrationRow(iconName: "bell.fill", iconColor: .fzPrimary, title: "Notifications", isOn: notifications.isAuthorized) {
+                Task {
+                    guard await NotificationManager.shared.requestAuthorization() else { return }
+                    // Onboarding doesn't persist preferred time-of-day, so a day picked
+                    // here without onboarding's context defaults reminders to morning.
+                    if let days = appState.userProfile?.preferredDays {
+                        let weekdays = Set(days.compactMap(Weekday.init(rawValue:)))
+                        NotificationManager.shared.scheduleWorkoutReminders(days: weekdays, time: .morning)
+                    }
+                }
             }
         }
         .padding(ForzeeSpacing.cardPadding)

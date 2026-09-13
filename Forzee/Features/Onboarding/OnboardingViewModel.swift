@@ -42,6 +42,7 @@ final class OnboardingViewModel: ObservableObject {
     @Published var sleepDataGranted: Bool = false
     @Published var calendarGranted: Bool = false
     @Published var locationGranted: Bool = false
+    @Published var notificationsGranted: Bool = false
 
     // MARK: - Saving State
 
@@ -75,6 +76,10 @@ final class OnboardingViewModel: ObservableObject {
             try await ForzeeDataService.shared.updateProfile(updates, userId: userId)
         } catch {
             saveError = "Couldn't save your profile. You can update this later in Settings."
+        }
+
+        if notificationsGranted {
+            NotificationManager.shared.scheduleWorkoutReminders(days: selectedDays, time: preferredTime)
         }
 
         isSaving = false
