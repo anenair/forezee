@@ -94,7 +94,7 @@ clean:
 ## Open the project in Xcode
 open:
 	@echo "→ Opening Forzee.xcodeproj in Xcode..."
-	@open Forzee.xcodeproj
+	@open -a Xcode Forzee.xcodeproj
 
 # ─── Lint / Format ──────────────────────────────────────────
 
