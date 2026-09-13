@@ -15,6 +15,8 @@ struct CoachView: View {
 
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var kaiEngine = KaiEngine.shared
+    @ObservedObject private var voiceManager = VoiceManager.shared
+    @ObservedObject private var voiceSynthesizer = KaiVoiceSynthesizer.shared
 
     @State private var briefing: String?
     @State private var isLoadingBriefing = false
@@ -22,6 +24,7 @@ struct CoachView: View {
     @State private var draftMessage: String = ""
     @State private var streamingReply: String = ""
     @State private var errorMessage: String?
+    @State private var isVoiceModeOn = false
 
     var body: some View {
         NavigationStack {
@@ -50,12 +53,86 @@ struct CoachView: View {
                         .padding(ForzeeSpacing.screenPadding)
                     }
 
+                    if isVoiceModeOn {
+                        voiceStatusBar
+                    }
+
                     inputBar
                 }
             }
             .navigationTitle("Coach")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: toggleVoiceMode) {
+                        Image(systemName: isVoiceModeOn ? "mic.fill" : "mic")
+                            .foregroundStyle(isVoiceModeOn ? Color.fzPrimary : Color.fzTextSecondary)
+                    }
+                }
+            }
         }
         .task { await loadBriefing() }
+        .onDisappear { stopVoiceMode() }
+    }
+
+    // MARK: - Voice Mode
+
+    private var voiceStatusBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform")
+                .foregroundStyle(Color.fzPrimary)
+                .symbolEffect(.variableColor.iterative, isActive: voiceManager.state != .idle)
+
+            Text(voiceStatusText)
+                .font(.fzBody(13, weight: .medium))
+                .foregroundStyle(Color.fzTextSecondary)
+
+            Spacer()
+        }
+        .padding(.horizontal, ForzeeSpacing.screenPadding)
+        .padding(.vertical, 8)
+    }
+
+    private var voiceStatusText: String {
+        if voiceSynthesizer.isSpeaking { return "Kai is speaking..." }
+        switch voiceManager.state {
+        case .idle:                return "Voice mode on — say \"Hi Kai\""
+        case .listeningForWake:    return "Listening for \"Hi Kai\"..."
+        case .listeningForCommand: return voiceManager.liveTranscript.isEmpty
+            ? "Go ahead, I'm listening..."
+            : voiceManager.liveTranscript
+        }
+    }
+
+    private func toggleVoiceMode() {
+        if isVoiceModeOn {
+            stopVoiceMode()
+        } else {
+            Task { await startVoiceMode() }
+        }
+    }
+
+    private func startVoiceMode() async {
+        if !voiceManager.isAuthorized {
+            guard await voiceManager.requestAuthorization() else {
+                errorMessage = "Voice mode needs microphone and speech recognition access — enable it in Settings."
+                return
+            }
+        }
+        isVoiceModeOn = true
+        listenForWakePhrase()
+    }
+
+    private func stopVoiceMode() {
+        isVoiceModeOn = false
+        voiceManager.stopListening()
+        voiceSynthesizer.stop()
+    }
+
+    private func listenForWakePhrase() {
+        guard isVoiceModeOn else { return }
+        voiceManager.startListeningForWake { command in
+            sendMessage(command, speakReply: true)
+        }
     }
 
     // MARK: - Briefing
@@ -115,7 +192,7 @@ struct CoachView: View {
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
                 .lineLimit(1...4)
 
-            Button(action: send) {
+            Button(action: { sendMessage(draftMessage, speakReply: false) }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
                     .foregroundStyle(canSend ? Color.fzPrimary : Color.fzBorder)
@@ -130,10 +207,16 @@ struct CoachView: View {
         !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !kaiEngine.isResponding
     }
 
-    private func send() {
+    /// Shared by the text input and voice mode — a voice-captured command
+    /// and a typed message both flow through the same chat pipeline and
+    /// land in the same conversation thread.
+    private func sendMessage(_ rawText: String, speakReply: Bool) {
         guard let userId = appState.userId else { return }
-        let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            if speakReply { listenForWakePhrase() }
+            return
+        }
 
         draftMessage = ""
         errorMessage = nil
@@ -153,11 +236,17 @@ struct CoachView: View {
                     onComplete: { reply in
                         messages.append(reply)
                         streamingReply = ""
+                        if speakReply {
+                            voiceSynthesizer.speak(reply.content, isPremium: appState.subscriptionTier.isPremium) {
+                                listenForWakePhrase()
+                            }
+                        }
                     }
                 )
             } catch {
                 errorMessage = error.localizedDescription
                 streamingReply = ""
+                if speakReply { listenForWakePhrase() }
             }
         }
     }

@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Voice chat: "Hi Kai" wake phrase (2026-09-13)
+
+- `Integrations/Voice/VoiceManager.swift` — Speech + AVAudioEngine wake-phrase detection ("Hi Kai" / "Hey Kai") and speech-to-text, on-device recognition when the device supports it.
+- `Integrations/Voice/KaiVoiceSynthesizer.swift` — speaks Kai's replies aloud. Free tier uses `AVSpeechSynthesizer` (system voice); Premium + a configured ElevenLabs key gets Kai's custom voice — this split was already staged in `Secrets.xcconfig.example`, just never wired up. Any ElevenLabs failure (network, quota, bad key) falls back to the system voice rather than going silent.
+- `CoachView` — mic toggle in the nav bar starts the wake-phrase loop: say "Hi Kai", ask something, get a spoken reply, automatically back to listening. Voice-captured and typed messages share the same conversation thread and pipeline.
+- **Known limitation, stated plainly**: this only works while the Coach screen is open and the phone is unlocked. iOS does not give third-party apps a Siri-style always-on background wake word — there's no public API for that. It also isn't gapless: `SFSpeechRecognitionTask` has to restart roughly every minute of audio, and a wake phrase spoken in that restart window could be missed. Real, usable, foreground-only — not Siri-grade.
+
 ### Added — Coach Mode: FSD-style autonomy levels for Kai (2026-09-13)
 
 - New onboarding step 5 ("How much should Kai reach out?") — this was already reserved in the design (`OnboardingProgressBar` and every step screen's "Step X of 5" label predate this; step 5 was never built until now).
