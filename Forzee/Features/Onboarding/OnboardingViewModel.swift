@@ -32,12 +32,17 @@ final class OnboardingViewModel: ObservableObject {
     @Published var selectedDays: Set<Weekday> = [.monday, .wednesday, .friday]
     @Published var preferredTime: TimeOfDay = .morning
 
+    // MARK: - Step 5: Coach Mode
+
+    @Published var coachMode: CoachMode = .guided
+
     // MARK: - Permissions
 
     @Published var healthKitGranted: Bool = false
     @Published var sleepDataGranted: Bool = false
     @Published var calendarGranted: Bool = false
     @Published var locationGranted: Bool = false
+    @Published var notificationsGranted: Bool = false
 
     // MARK: - Saving State
 
@@ -63,6 +68,7 @@ final class OnboardingViewModel: ObservableObject {
             "goals":                  selectedGoals.map(\.rawValue),
             "equipment":              selectedEquipment.map(\.rawValue),
             "preferred_days":         selectedDays.map(\.rawValue),
+            "coach_mode":             coachMode.rawValue,
             "onboarding_complete":    true
         ]
 
@@ -70,6 +76,10 @@ final class OnboardingViewModel: ObservableObject {
             try await ForzeeDataService.shared.updateProfile(updates, userId: userId)
         } catch {
             saveError = "Couldn't save your profile. You can update this later in Settings."
+        }
+
+        if notificationsGranted {
+            NotificationManager.shared.scheduleWorkoutReminders(days: selectedDays, time: preferredTime)
         }
 
         isSaving = false
@@ -212,6 +222,44 @@ enum Weekday: String, CaseIterable, Identifiable {
         case .wednesday: return "W"; case .thursday: return "T"
         case .friday: return "F"; case .saturday: return "S"
         case .sunday: return "S"
+        }
+    }
+}
+
+// MARK: - CoachMode
+
+/// How much Kai initiates contact vs. waits to be asked — an axis
+/// independent of fitness level. Combines with tone-per-level in
+/// KaiSystemPrompt (e.g. "novice + accountability" reads differently
+/// than "advanced + accountability").
+enum CoachMode: String, CaseIterable, Identifiable {
+    case advisory      = "advisory"
+    case guided        = "guided"
+    case accountability = "accountability"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .advisory:      return "Advisory"
+        case .guided:        return "Guided"
+        case .accountability: return "Accountability"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .advisory:      return "Answer when I ask — don't reach out first"
+        case .guided:        return "Suggest things, but let me decide"
+        case .accountability: return "Push back when I'm avoiding it"
+        }
+    }
+
+    var iconSystemName: String {
+        switch self {
+        case .advisory:      return "bubble.left"
+        case .guided:        return "compass.drawing"
+        case .accountability: return "flag.checkered"
         }
     }
 }

@@ -6,18 +6,20 @@
 //
 // Layout:
 //   - "Forzee works best with access to:" heading (28pt)
-//   - 4 permission rows with toggles:
+//   - 5 permission rows with toggles:
 //       1. Apple Health   (coral heart-pulse icon) — toggle default ON
 //       2. Sleep Data     (primary moon icon)       — toggle default ON
 //       3. Calendar       (primary calendar icon)   — toggle default OFF
 //       4. Location       (primary map-pin icon)    — toggle default OFF
+//       5. Notifications  (primary bell icon)       — toggle default OFF
 //   - Spacer (fill)
 //   - "Grant All" primary button
 //   - "Set up later" text link
 //
 // Tapping "Grant All" requests system permissions via HealthKit /
-// EventKit / CoreLocation. Actual permission request handlers are
-// TODO — stubbed here for the UI flow.
+// EventKit / CoreLocation / UNUserNotificationCenter, wired to the
+// Phase 2 integration managers. Toggles reflect what the system
+// actually granted, not just intent.
 // ============================================================
 
 import SwiftUI
@@ -28,6 +30,8 @@ struct OnboardingPermissionsView: View {
     let onGrantAll: () -> Void
     let onSetUpLater: () -> Void
     let onBack: () -> Void
+
+    @State private var isRequesting = false
 
     var body: some View {
         ZStack {
@@ -74,13 +78,20 @@ struct OnboardingPermissionsView: View {
                             subtitle: "Find gyms and outdoor routes nearby",
                             isOn: $viewModel.locationGranted
                         )
+                        PermissionRow(
+                            iconName: "bell.fill",
+                            iconColor: Color.fzPrimary,
+                            title: "Notifications",
+                            subtitle: "Workout reminders and check-ins from Kai",
+                            isOn: $viewModel.notificationsGranted
+                        )
                     }
                     .frame(maxHeight: .infinity)
 
                     // ── CTAs ──────────────────────────────────────
                     VStack(spacing: 12) {
-                        ForzeeButton(title: "Grant All") {
-                            grantAll()
+                        ForzeeButton(title: "Grant All", isLoading: isRequesting) {
+                            Task { await grantAll() }
                         }
                         ForzeeTextButton(title: "Set up later", action: onSetUpLater)
                     }
@@ -92,13 +103,26 @@ struct OnboardingPermissionsView: View {
         }
     }
 
-    private func grantAll() {
-        // TODO: Request actual system permissions via HealthKit, EventKit, CoreLocation
-        // For now, set all toggles on and advance
-        viewModel.healthKitGranted = true
-        viewModel.sleepDataGranted = true
-        viewModel.calendarGranted = true
+    private func grantAll() async {
+        isRequesting = true
+
+        // HealthKit covers both the "Apple Health" and "Sleep Data" rows —
+        // one system prompt, sleep authorization rides along with it.
+        let healthGranted = await HealthKitManager.shared.requestAuthorization()
+        viewModel.healthKitGranted = healthGranted
+        viewModel.sleepDataGranted = healthGranted
+
+        viewModel.calendarGranted = await CalendarManager.shared.requestAccess()
+
+        WeatherManager.shared.requestAuthorization()
+        // CoreLocation's prompt is async/delegate-driven with no completion callback,
+        // so we reflect the toggle optimistically; buildRecentContext degrades
+        // gracefully to nil if the user ultimately denies it.
         viewModel.locationGranted = true
+
+        viewModel.notificationsGranted = await NotificationManager.shared.requestAuthorization()
+
+        isRequesting = false
         onGrantAll()
     }
 }

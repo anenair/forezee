@@ -5,7 +5,7 @@
 // Navigation coordinator for the full onboarding sequence:
 //
 //   Splash → Welcome → Step 1 (Fitness Level) → Step 2 (Goals)
-//   → Step 3 (Equipment) → Step 4 (Schedule)
+//   → Step 3 (Equipment) → Step 4 (Schedule) → Step 5 (Coach Mode)
 //   → Permissions → Meet Kai → [App Main Tab View]
 //
 // Uses a custom step-based navigation rather than NavigationStack
@@ -24,12 +24,13 @@ enum OnboardingStep: Int, CaseIterable {
     case goals         = 3
     case equipment     = 4
     case schedule      = 5
-    case permissions   = 6
-    case meetKai       = 7
+    case coachMode     = 6
+    case permissions   = 7
+    case meetKai       = 8
 
     var showsProgressBar: Bool {
         switch self {
-        case .fitnessLevel, .goals, .equipment, .schedule: return true
+        case .fitnessLevel, .goals, .equipment, .schedule, .coachMode: return true
         default: return false
         }
     }
@@ -41,6 +42,7 @@ enum OnboardingStep: Int, CaseIterable {
         case .goals:        return 2
         case .equipment:    return 3
         case .schedule:     return 4
+        case .coachMode:    return 5
         default:            return nil
         }
     }
@@ -109,6 +111,9 @@ struct OnboardingFlowView: View {
 
         case .schedule:
             OnboardingScheduleView(onContinue: { advance() })
+
+        case .coachMode:
+            OnboardingCoachModeView(onSelect: { advance() })
 
         case .permissions:
             OnboardingPermissionsView(

@@ -33,6 +33,13 @@ targets:
     configFiles:
       Debug: Secrets.xcconfig
       Release: Secrets.xcconfig
+    entitlements:
+      path: Forzee/Resources/Forzee.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+        com.apple.developer.weatherkit: true
+        aps-environment: development
     settings:
       base:
         INFOPLIST_FILE: Forzee/Resources/Info.plist
@@ -55,6 +62,7 @@ targets:
         NSMicrophoneUsageDescription: "Forzee uses your microphone for voice conversations with Kai."
         NSSpeechRecognitionUsageDescription: "Forzee uses speech recognition so you can talk to Kai hands-free."
         NSCalendarsUsageDescription: "Forzee reads your calendar so Kai can plan workouts around your schedule."
+        NSLocationWhenInUseUsageDescription: "Forzee uses your location to check the weather so Kai can route you indoors or outdoors."
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
     dependencies:

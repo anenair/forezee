@@ -124,6 +124,13 @@ db-migrate-dev:
 	@which supabase > /dev/null || (echo "→ Installing Supabase CLI..." && brew install supabase/tap/supabase)
 	@supabase db push --local
 
+## Deploy the send-push Edge Function. Requires `supabase link` and
+## APNS_* secrets set first — see supabase/functions/send-push/README.md
+deploy-functions:
+	@echo "→ Deploying send-push..."
+	@which supabase > /dev/null || (echo "→ Installing Supabase CLI..." && brew install supabase/tap/supabase)
+	@supabase functions deploy send-push
+
 # ─── Git ────────────────────────────────────────────────────
 
 ## Stage all changes and commit. Usage: make commit MSG="your message"
@@ -163,6 +170,7 @@ help:
 	@echo "  make lint-fix       Auto-fix SwiftLint violations"
 	@echo "  make format         Run swift-format"
 	@echo "  make db-migrate-dev Apply schema to local Supabase (dev only)"
+	@echo "  make deploy-functions Deploy the send-push Edge Function"
 	@echo "  make commit MSG=… Stage all + commit with message"
 	@echo "  make push           Push current branch to origin"
 	@echo "  make ship MSG=…   commit + push in one shot"

@@ -175,6 +175,103 @@ final class KaiEngine: ObservableObject {
         return response
     }
 
+    /// A short, live remark fired when the user checks off an exercise mid-workout.
+    /// Haiku, no context snapshot — this needs to land while someone's resting
+    /// between sets at the gym, not after a HealthKit/EventKit/WeatherKit round-trip.
+    func generateGymCompanionComment(
+        userId: String,
+        exerciseName: String,
+        fitnessLevel: String
+    ) async throws -> String {
+        let model = KaiModel.haiku
+        let prompt = GymCompanionCommentPrompt.build(exerciseName: exerciseName, fitnessLevel: fitnessLevel)
+
+        let response = try await apiClient.complete(
+            model: model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt
+        )
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .gymCompanionComment,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: response.estimatedTokenCount
+        )
+
+        return response
+    }
+
+    /// Real LLM understanding of a mid-workout voice command — no local
+    /// pattern matching. Haiku + tool use classifies the intent and extracts
+    /// weight/reps in one call; genuinely open-ended questions come back as
+    /// action == .chat for the caller to escalate to a full chat() call.
+    /// No context snapshot, same reasoning as the companion comment: this
+    /// needs to come back fast, and workout state (not sleep/calendar/weather)
+    /// is what actually matters for this decision.
+    func interpretWorkoutVoiceCommand(
+        userId: String,
+        transcript: String,
+        state: WorkoutVoiceState
+    ) async throws -> WorkoutVoiceCommandResult {
+        let model = KaiModel.haiku
+        let prompt = WorkoutVoiceCommandPrompt.build(transcript: transcript, state: state)
+
+        let input = try await apiClient.completeWithTool(
+            model: model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt,
+            tool: WorkoutVoiceCommandPrompt.tool
+        )
+        let result = WorkoutVoiceCommandResult(from: input)
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .workoutVoiceCommand,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: result.spokenReply.estimatedTokenCount
+        )
+
+        return result
+    }
+
+    /// A short report after the user finishes a workout — what they actually
+    /// did vs. what was prescribed, plus one thing to focus on next time.
+    /// Sonnet — needs to reason over the full context snapshot, same as generation.
+    func generateWorkoutReport(
+        userId: String,
+        workout: GeneratedWorkout,
+        completedExerciseNames: [String]
+    ) async throws -> String {
+        try await usageGate.checkLimit(userId: userId, taskType: .workoutReport)
+
+        let context = await contextBuilder.buildSnapshot(userId: userId)
+        let model = KaiModel.sonnet
+        let prompt = WorkoutReportPrompt.build(
+            context: context,
+            workout: workout,
+            completedExerciseNames: completedExerciseNames
+        )
+
+        let response = try await apiClient.complete(
+            model: model,
+            systemPrompt: KaiSystemPrompt.build(context: context),
+            userMessage: prompt
+        )
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .workoutReport,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: response.estimatedTokenCount
+        )
+
+        return response
+    }
+
     // MARK: - Private Helpers
 
     private func assembleMessages(

@@ -27,11 +27,20 @@ enum KaiSystemPrompt {
 
         \(toneGuide(for: context.user.level))
 
+        \(coachModeGuide(for: context.user.coachMode))
+
         \(userContext(context))
 
         \(rules)
         """
     }
+
+    // MARK: - Lightweight Variant
+
+    /// Identity only, no philosophy/tone/context injection. Used for the
+    /// gym companion comment — that call needs to be small and fast, not
+    /// a full system prompt round-trip while the user is resting between sets.
+    static let identityOnly = identity
 
     // MARK: - Identity
 
@@ -102,6 +111,38 @@ enum KaiSystemPrompt {
             return """
             ## Tone
             - Adapt to the user. Be warm but not patronising, confident but not arrogant.
+            """
+        }
+    }
+
+    // MARK: - Coach Mode
+
+    /// How much Kai initiates vs. waits to be asked — an axis independent
+    /// of tone-per-level above. Set during onboarding, changeable in Settings.
+    private static func coachModeGuide(for mode: String) -> String {
+        switch mode {
+        case "advisory":
+            return """
+            ## Coach Mode: Advisory
+            - Only respond when the user speaks first. Never initiate.
+            - If asked for a daily briefing, give it — but don't imply you'd have said something unprompted.
+            - No follow-up questions about missed sessions unless the user brings it up.
+            """
+        case "accountability":
+            return """
+            ## Coach Mode: Accountability
+            - The user opted into being pushed. Don't be purely reactive — call out avoidance directly.
+            - If they've skipped or gone quiet, lead with that: "You said this mattered — what's actually \
+              going on today?" Curious and direct, not scolding.
+            - Still use Momentum, not streaks — accountability means honesty, not shame.
+            - This mode currently only changes what you say when they open the app; you cannot yet reach \
+              them outside it (no push notifications wired up), so don't imply you already have.
+            """
+        default: // "guided"
+            return """
+            ## Coach Mode: Guided
+            - Proactively suggest — daily briefing, workout ideas — but the user always decides.
+            - Acknowledge a missed day gently once, then move on. Never chase.
             """
         }
     }

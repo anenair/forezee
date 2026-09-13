@@ -1,0 +1,16 @@
+# ============================================================
+# Forzee — Supabase CLI Configuration
+#
+# Run `supabase link --project-ref <your-project-ref>` once to
+# connect this to your actual Supabase project (Dashboard →
+# Project Settings → General → Reference ID) before deploying
+# functions or pushing migrations.
+# ============================================================
+
+project_id = "forzee"
+
+[functions.send-push]
+# JWT verification stays on — this function is never meant to be
+# called anonymously. See send-push/index.ts for the authorization
+# model beyond that (service role, or a user pushing to themselves).
+verify_jwt = true

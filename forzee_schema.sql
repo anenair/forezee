@@ -35,6 +35,10 @@ create table public.profiles (
   -- Preferred workout days e.g. ["monday", "wednesday", "friday"]
   preferred_days text[] default '{}',
 
+  -- How much Kai initiates contact vs. waits to be asked
+  -- advisory | guided | accountability
+  coach_mode text not null default 'guided',
+
   -- Preferred session duration in minutes
   preferred_duration_mins int default 45,
 
@@ -191,6 +195,57 @@ create table public.context_signals (
 );
 
 -- ============================================================
+-- DEVICE TOKENS
+-- APNs push tokens. Written by the client (RLS: own rows only),
+-- read by the send-push Edge Function using the service role key,
+-- which bypasses RLS entirely — that's the trust boundary: a
+-- regular user can register/remove their own token but can never
+-- read anyone else's, only the trusted server-side function can.
+-- ============================================================
+create table public.device_tokens (
+  id uuid default uuid_generate_v4() primary key,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now(),
+
+  user_id uuid references public.profiles(id) on delete cascade,
+
+  -- Hex-encoded APNs device token
+  token text not null,
+
+  -- sandbox (Debug/TestFlight-via-Xcode) | production (App Store/TestFlight)
+  environment text not null default 'sandbox',
+
+  unique (user_id, token)
+);
+
+create index idx_device_tokens_user on public.device_tokens(user_id);
+
+-- ============================================================
+-- NUTRITION LOGS
+-- Phase 2: manually logged meals feed today's macro summary
+-- into the AI context snapshot and the Progress tab.
+-- ============================================================
+create table public.nutrition_logs (
+  id uuid default uuid_generate_v4() primary key,
+  logged_at timestamp with time zone default now(),
+
+  user_id uuid references public.profiles(id) on delete cascade,
+
+  -- Meal type: breakfast | lunch | dinner | snack
+  meal_type text not null default 'snack',
+
+  calories int not null default 0,
+  protein_g int not null default 0,
+  carbs_g int not null default 0,
+  fat_g int not null default 0,
+
+  notes text
+);
+
+create index idx_nutrition_user_logged_at
+  on public.nutrition_logs(user_id, logged_at);
+
+-- ============================================================
 -- COACH MESSAGES
 -- Chat history between user and AI coach
 -- ============================================================
@@ -319,6 +374,8 @@ alter table public.context_signals enable row level security;
 alter table public.coach_messages enable row level security;
 alter table public.progress_photos enable row level security;
 alter table public.personal_records enable row level security;
+alter table public.nutrition_logs enable row level security;
+alter table public.device_tokens enable row level security;
 
 -- Profiles
 create policy "Users can view own profile"
@@ -356,6 +413,16 @@ create policy "Users can manage own photos"
 create policy "Users can manage own PRs"
   on public.personal_records for all using (auth.uid() = user_id);
 
+-- Nutrition Logs
+create policy "Users can manage own nutrition logs"
+  on public.nutrition_logs for all using (auth.uid() = user_id);
+
+-- Device Tokens — client can register/remove its own token only.
+-- The send-push Edge Function reads across all users via the
+-- service role key, which bypasses RLS by design.
+create policy "Users can manage own device tokens"
+  on public.device_tokens for all using (auth.uid() = user_id);
+
 -- Exercises are public read
 alter table public.exercises enable row level security;
 create policy "Exercises are publicly readable"
@@ -378,6 +445,10 @@ create trigger on_profiles_updated
 
 create trigger on_plans_updated
   before update on public.workout_plans
+  for each row execute procedure public.handle_updated_at();
+
+create trigger on_device_tokens_updated
+  before update on public.device_tokens
   for each row execute procedure public.handle_updated_at();
 
 -- ============================================================
