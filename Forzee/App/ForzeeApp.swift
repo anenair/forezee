@@ -11,6 +11,7 @@ import SwiftUI
 @main
 struct ForzeeApp: App {
 
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
 

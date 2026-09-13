@@ -217,6 +217,34 @@ final class ForzeeDataService {
         )
     }
 
+    // MARK: - Device Tokens (push notifications)
+
+    /// Registers or refreshes this device's APNs token for the signed-in user.
+    /// RLS restricts this to the caller's own rows — see forzee_schema.sql.
+    func saveDeviceToken(_ token: String, environment: String, userId: String) async throws {
+        let record = DeviceTokenRecord(userId: userId, token: token, environment: environment)
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(record)
+        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+        try await client
+            .from("device_tokens")
+            .upsert(dict, onConflict: "user_id,token")
+            .execute()
+    }
+
+    private struct DeviceTokenRecord: Encodable {
+        let userId: String
+        let token: String
+        let environment: String
+
+        enum CodingKeys: String, CodingKey {
+            case userId = "user_id"
+            case token
+            case environment
+        }
+    }
+
     // MARK: - Workouts (Phase 1 — logging)
 
     /// Persists a Kai-generated workout as completed, along with which

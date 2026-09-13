@@ -39,6 +39,7 @@ targets:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.access: []
         com.apple.developer.weatherkit: true
+        aps-environment: development
     settings:
       base:
         INFOPLIST_FILE: Forzee/Resources/Info.plist

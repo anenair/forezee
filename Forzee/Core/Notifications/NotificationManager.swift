@@ -20,6 +20,7 @@
 
 import Foundation
 import UserNotifications
+import UIKit
 
 @MainActor
 final class NotificationManager: NSObject, ObservableObject {
@@ -54,6 +55,12 @@ final class NotificationManager: NSObject, ObservableObject {
         do {
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             isAuthorized = granted
+            if granted {
+                // Triggers AppDelegate.didRegisterForRemoteNotificationsWithDeviceToken,
+                // which saves the token to Supabase — that's what lets the send-push
+                // Edge Function actually reach this device.
+                UIApplication.shared.registerForRemoteNotifications()
+            }
             return granted
         } catch {
             isAuthorized = false

@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Server-side push: the send-push Edge Function (2026-09-13)
+
+First real backend component — no UI, deliberately. A secure,
+authenticated primitive for sending a push notification, closing the
+gap the local-notification system's own changelog entry called out.
+
+- **`supabase/functions/send-push/index.ts`** — Supabase Edge Function (Deno). Holds the APNs private key as a server-side secret — it never ships to the client. Signs its own ES256 provider JWT per Apple's APNs spec (no external JWT library — Deno's Web Crypto API does the ECDSA signing directly) and posts to `api.push.apple.com` (or the sandbox host) over HTTP/2.
+- **Authorization, not just authentication**: Supabase's gateway verifies the caller's JWT is valid before the function runs at all (`verify_jwt = true`); the function itself then only permits the **service role** (a cron job or backend process — can push to any user) or **a user pushing to themselves** (their JWT's `sub` matches the target `user_id`). Every other combination is rejected with 403 before any APNs call is made.
+- **`device_tokens` table** (`forzee_schema.sql`) — RLS scoped to `auth.uid()`, so a client can register or remove only its own token. The function reads across all users via the service-role key, which bypasses RLS by design — that's the actual trust boundary, not the table.
+- **iOS side**: `AppDelegate.swift` (bridged in via `@UIApplicationDelegateAdaptor`, since SwiftUI's `App` protocol has no hook for the APNs device-token callback) captures the token and saves it through `ForzeeDataService.saveDeviceToken`. `NotificationManager.requestAuthorization()` now also calls `registerForRemoteNotifications()` once local notification permission is granted.
+- Dead tokens (APNs 400/410 responses) get deleted automatically on next send — no accumulating cruft.
+- `aps-environment` entitlement — **same paid Apple Developer Program gate as HealthKit/WeatherKit**, called out directly in the function's README.
+- `make deploy-functions` target; full setup (get an APNs Auth Key, `supabase link`, set 5 secrets, deploy) documented in `supabase/functions/send-push/README.md` since there's no CLI in this environment to actually run any of it.
+- **Deliberately not built**: anything that decides *who* to push and *why* (e.g. "HRV crashed, suggest a rest day" computed from `context_signals`) — this function only sends when told to. That decision logic is a scheduled job (Supabase Cron/`pg_cron`) that doesn't exist yet; this is the primitive it would call.
+
 ### Added — Local notification system (2026-09-13)
 
 - `Core/Notifications/NotificationManager.swift` — local notifications only, no APNs/server. Two kinds:
