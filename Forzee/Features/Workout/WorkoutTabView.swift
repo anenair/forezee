@@ -31,6 +31,7 @@ struct WorkoutTabView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var voiceManager = VoiceManager.shared
     @ObservedObject private var voiceSynthesizer = KaiVoiceSynthesizer.shared
+    @ObservedObject private var syncManager = SyncManager.shared
 
     @State private var workout: GeneratedWorkout?
     @State private var completedExerciseIds: Set<UUID> = []
@@ -109,6 +110,9 @@ struct WorkoutTabView: View {
 
     private var voiceStatusText: String {
         if voiceSynthesizer.isSpeaking { return "Kai is speaking..." }
+        // Connection can drop mid-workout even if it was fine when voice mode
+        // started — surface that instead of letting commands fail silently.
+        if !syncManager.isOnline { return "No connection — voice commands need one right now." }
         switch voiceManager.state {
         case .idle:                return "Voice mode on — say \"Hi Kai\""
         case .listeningForWake:    return "Listening for \"Hi Kai\"..."
@@ -127,6 +131,10 @@ struct WorkoutTabView: View {
     }
 
     private func startVoiceMode() async {
+        guard syncManager.isOnline else {
+            errorMessage = "Voice mode needs a connection — Kai has to understand what you say."
+            return
+        }
         if !voiceManager.isAuthorized {
             guard await voiceManager.requestAuthorization() else {
                 errorMessage = "Voice mode needs microphone and speech recognition access — enable it in Settings."
@@ -175,7 +183,16 @@ struct WorkoutTabView: View {
                     askKai(command)
                 }
             } catch {
-                speak("I couldn't understand that — try again.")
+                // The command reached here, so voice mode was on when we
+                // started — but a live network call is what actually failed,
+                // and "I couldn't understand that" would misattribute a
+                // dead connection to bad speech recognition.
+                if syncManager.isOnline {
+                    speak("I couldn't understand that — try again.")
+                } else {
+                    stopVoiceMode()
+                    errorMessage = "Lost connection — voice mode needs one. Your logged sets are still saved."
+                }
             }
         }
     }
@@ -319,7 +336,12 @@ struct WorkoutTabView: View {
             Text("No workout yet today.")
                 .font(.fzBody(15))
                 .foregroundStyle(Color.fzTextSecondary)
-            ForzeeButton(title: "Generate Today's Workout", isLoading: isGenerating, action: generate)
+
+            if !syncManager.isOnline {
+                ConnectivityNotice(message: "No connection — Kai needs one to generate a workout.")
+            } else {
+                ForzeeButton(title: "Generate Today's Workout", isLoading: isGenerating, action: generate)
+            }
         }
         .padding(.top, ForzeeSpacing.sectionGap)
     }

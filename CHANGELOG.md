@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Surface AI connectivity, not just data sync (2026-09-13)
+
+Kai is AI-centric — every chat reply, workout generation, and voice
+command needs a live network call. Left unindicated, a dead connection
+just makes the app look unresponsive rather than explaining itself.
+Distinct from the Settings sync-status row from earlier (that one's
+about whether *saved data* has reached the server — always succeeds
+locally regardless of connection); this is "the thing you're about to
+do needs Kai, and Kai needs a connection right now."
+
+- **`Core/DesignSystem/ConnectivityNotice.swift`** — small reusable banner, reused everywhere below rather than one-off copy.
+- **Coach tab**: banner above the input bar when offline; send button now disabled when offline (previously it would just fail with a raw network-error string after tapping); the daily briefing card explains a failed load instead of showing blank space when there's no connection.
+- **Workout tab**: banner in place of "Generate Today's Workout" when offline; voice mode won't start offline (clear message instead of letting it fail); if the connection drops mid-workout while voice mode is already on, the status line and any failed command say so specifically — and make explicit that logged sets are still saved regardless, since that part really is offline-safe.
+- Deliberately did not touch the gym companion comment (low-stakes, silent-fail is fine) or the post-workout report's existing fallback text (already explains itself) — scoped to the places where connectivity loss would otherwise look like the app just broke.
+
 ### Changed — Voice-logged sets now use real LLM understanding, not pattern matching (2026-09-13)
 
 The first pass at this used local regex/keyword matching for latency

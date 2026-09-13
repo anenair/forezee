@@ -17,6 +17,7 @@ struct CoachView: View {
     @ObservedObject private var kaiEngine = KaiEngine.shared
     @ObservedObject private var voiceManager = VoiceManager.shared
     @ObservedObject private var voiceSynthesizer = KaiVoiceSynthesizer.shared
+    @ObservedObject private var syncManager = SyncManager.shared
 
     @State private var briefing: String?
     @State private var isLoadingBriefing = false
@@ -55,6 +56,12 @@ struct CoachView: View {
 
                     if isVoiceModeOn {
                         voiceStatusBar
+                    }
+
+                    if !syncManager.isOnline {
+                        ConnectivityNotice(message: "No connection — Kai can't chat or listen right now.")
+                            .padding(.horizontal, ForzeeSpacing.screenPadding)
+                            .padding(.bottom, 8)
                     }
 
                     inputBar
@@ -112,6 +119,10 @@ struct CoachView: View {
     }
 
     private func startVoiceMode() async {
+        guard syncManager.isOnline else {
+            errorMessage = "Voice mode needs a connection — Kai has to understand what you say."
+            return
+        }
         if !voiceManager.isAuthorized {
             guard await voiceManager.requestAuthorization() else {
                 errorMessage = "Voice mode needs microphone and speech recognition access — enable it in Settings."
@@ -154,6 +165,10 @@ struct CoachView: View {
                 Text(briefing)
                     .font(.fzBody(15))
                     .foregroundStyle(Color.fzText)
+            } else if !syncManager.isOnline {
+                Text("No connection — Kai needs one to put this together. Reconnect and reopen Coach.")
+                    .font(.fzBody(13))
+                    .foregroundStyle(Color.fzTextSecondary)
             }
         }
         .padding(ForzeeSpacing.cardPadding)
@@ -204,7 +219,9 @@ struct CoachView: View {
     }
 
     private var canSend: Bool {
-        !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !kaiEngine.isResponding
+        !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !kaiEngine.isResponding
+            && syncManager.isOnline
     }
 
     /// Shared by the text input and voice mode — a voice-captured command
