@@ -16,6 +16,7 @@ struct SettingsView: View {
     @ObservedObject private var calendar = CalendarManager.shared
     @ObservedObject private var weather = WeatherManager.shared
     @ObservedObject private var notifications = NotificationManager.shared
+    @ObservedObject private var syncManager = SyncManager.shared
 
     @State private var showPaywall = false
     @State private var isSigningOut = false
@@ -29,6 +30,7 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
                         subscriptionCard
+                        syncStatusRow
                         coachModeCard
                         integrationsCard
                         signOutButton
@@ -82,6 +84,33 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: ForzeeRadius.card)
                 .strokeBorder(Color.fzBorder, lineWidth: 1)
         )
+    }
+
+    // MARK: - Sync Status
+
+    /// Workouts and nutrition logs save to this device instantly regardless
+    /// of connectivity, then upload in the background when a connection is
+    /// available — this just shows that's actually happening, not a dashboard.
+    private var syncStatusRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: syncManager.isOnline ? "checkmark.icloud.fill" : "icloud.slash.fill")
+                .foregroundStyle(syncManager.isOnline ? Color.fzGreen : Color.fzTextSecondary)
+
+            if syncManager.pendingCount > 0 {
+                Text(syncManager.isSyncing
+                     ? "Syncing \(syncManager.pendingCount) item\(syncManager.pendingCount == 1 ? "" : "s")..."
+                     : "\(syncManager.pendingCount) item\(syncManager.pendingCount == 1 ? "" : "s") waiting to sync")
+                    .font(.fzBody(13))
+                    .foregroundStyle(Color.fzTextSecondary)
+            } else {
+                Text(syncManager.isOnline ? "Everything's synced" : "No connection — saved on this device")
+                    .font(.fzBody(13))
+                    .foregroundStyle(Color.fzTextSecondary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, ForzeeSpacing.screenPadding)
     }
 
     // MARK: - Coach Mode

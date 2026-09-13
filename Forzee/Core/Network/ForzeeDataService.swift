@@ -181,17 +181,10 @@ final class ForzeeDataService {
 
     // MARK: - Nutrition (Phase 2)
 
-    /// Save a manually logged meal.
+    /// Save a manually logged meal. Local-first via SyncManager — always
+    /// succeeds even with no connection; uploads opportunistically.
     func saveNutritionEntry(_ entry: NutritionEntry) async throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(entry)
-        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-        try await client
-            .from("nutrition_logs")
-            .insert(dict)
-            .execute()
+        await SyncManager.shared.enqueue(table: "nutrition_logs", record: entry)
     }
 
     /// Fetch and aggregate today's logged nutrition for the context snapshot and Progress tab.
@@ -248,9 +241,11 @@ final class ForzeeDataService {
     // MARK: - Workouts (Phase 1 — logging)
 
     /// Persists a Kai-generated workout as completed, along with which
-    /// exercises the user checked off during the session. Two inserts:
-    /// `workouts` (the plan + context snapshot at generation time) and
-    /// `sessions` (the completion record).
+    /// exercises the user checked off during the session. Local-first via
+    /// SyncManager — this is exactly the "finished a workout with no gym
+    /// WiFi" case, so it must never depend on being online. Two queued
+    /// writes: `workouts` (the plan + context snapshot at generation time)
+    /// and `sessions` (the completion record).
     func saveCompletedWorkout(
         _ workout: GeneratedWorkout,
         completedExerciseIds: Set<UUID>,
@@ -266,7 +261,7 @@ final class ForzeeDataService {
             status: "completed",
             exercises: workout.exercises
         )
-        try await insert(workoutRecord, into: "workouts")
+        await SyncManager.shared.enqueue(table: "workouts", record: workoutRecord)
 
         let sessionRecord = SessionInsertRecord(
             userId: userId,
@@ -276,16 +271,14 @@ final class ForzeeDataService {
                 .filter { completedExerciseIds.contains($0.id) }
                 .map { CompletedExerciseLog(exerciseName: $0.name, setsCompleted: $0.sets) }
         )
-        try await insert(sessionRecord, into: "sessions")
+        await SyncManager.shared.enqueue(table: "sessions", record: sessionRecord)
     }
 
-    private func insert<T: Encodable>(_ record: T, into table: String) async throws {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        let data = try encoder.encode(record)
-        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-        try await client.from(table).insert(dict).execute()
+    /// Direct, immediate network insert — used only by SyncManager when
+    /// actually uploading a queued write. Never call this straight from a
+    /// view or view model; that would defeat the offline-first guarantee.
+    func rawInsert(table: String, values: [String: Any]) async throws {
+        try await client.from(table).insert(values).execute()
     }
 
     private struct WorkoutInsertRecord: Encodable {

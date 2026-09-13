@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Offline-first writes: workouts and nutrition logs (2026-09-13)
+
+Real bug, not a nice-to-have: `ForzeeDataService` wrote straight to
+Supabase on every save, several calls via `try?` — no signal at the
+gym meant the workout you just finished was silently gone. No retry,
+no local copy.
+
+- **`Core/Sync/PendingWrite.swift`** — a SwiftData model. Local disk write, always succeeds regardless of connectivity — this is the actual durability.
+- **`Core/Sync/SyncManager.swift`** — `enqueue()` saves locally and returns immediately, never blocking on network. Upload happens opportunistically in the background, triggered by (a) connectivity transitioning offline → online (`NWPathMonitor`), (b) app foreground, (c) a 60s safety-net timer while open — never synchronously off an individual save, per "shouldn't be on every save."
+- `ForzeeDataService.saveCompletedWorkout` and `saveNutritionEntry` now route through the queue instead of hitting the network directly — call sites in `WorkoutTabView`/`ProgressTabView` didn't need to change.
+- A `Settings` row shows sync status (synced / N items waiting / no connection — saved on this device) — not a dashboard, just enough to trust the save actually happened.
+- Retries up to 10 times per write, then stops auto-retrying (surfaced via the pending count, never silently dropped). Saves to disk immediately after each successful upload rather than batching — narrows the crash window where a retry could duplicate a row server-side.
+- **Scope, stated plainly**: only workouts/sessions and nutrition logs are durable this way. Usage tracking, context signals, and chat messages are still best-effort `try?` — lower stakes if lost, and making everything durable is real additional work not attempted here.
+
 ### Added — Server-side push: the send-push Edge Function (2026-09-13)
 
 First real backend component — no UI, deliberately. A secure,
