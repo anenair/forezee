@@ -7,19 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — Voice-logged sets: "Hi Kai, mark a set complete" (2026-09-13)
+### Changed — Voice-logged sets now use real LLM understanding, not pattern matching (2026-09-13)
 
-Mid-workout voice commands — logging a set, asking what's next,
-checking progress — deliberately do NOT go through `KaiEngine.chat`
-(Sonnet). A 1-3s round-trip is a bad experience mid-set, and a dead
-signal shouldn't block logging a set you just did — same offline-first
-reasoning as everything else in this thread. Instead:
+The first pass at this used local regex/keyword matching for latency
+and offline reasons. Overridden on request: mid-workout voice commands
+now go through Claude (Haiku), not hand-rolled parsing.
 
-- **`Integrations/Voice/WorkoutVoiceCommandParser.swift`** — local, offline, no-LLM pattern matching for the fixed command set: "mark a set complete" (+ optional weight/reps), "same as previous", "what's my next exercise", "how am I doing". Anything else comes back `.unrecognized` and only then falls back to a real (network-dependent) `KaiEngine.chat` call. Not real NLU — covers the phrasings in the brief and close variants; multi-word compound numbers ("one thirty five" for 135) aren't handled, documented as a known gap rather than pretended away.
-- **`Core/Models/LoggedSet.swift`** — real per-set data (weight, unit, reps) that didn't exist before; `WorkoutTabView` previously only tracked whole-exercise completion.
-- **`WorkoutTabView`** gets its own mic toggle and wake-phrase loop (reuses `VoiceManager`/`KaiVoiceSynthesizer` from the Coach tab's voice mode, same foreground-only caveats apply). A recognized command executes immediately and speaks a short local confirmation ("Set 2 of 3 logged for Bench Press, 135 pounds, 8 reps") — no network involved. "Same as previous" copies weight/reps from the last logged set for that exercise; with nothing said and nothing to copy, falls back to the AI's suggested weight rather than logging blank.
-- Logged sets now show under each exercise, and feed the final session save: `ForzeeDataService.saveCompletedWorkout` gained a `loggedSets:` parameter and now writes real per-set `sets_log` entries (matching the schema's documented structure) instead of just an exercise-level count. Exercises completed by tapping (no voice detail) still get an approximate entry using the AI's prescribed weight, so that data isn't lost either.
-- **Known sharp edge**: `VoiceManager` is a shared singleton with one active listening session. If Coach tab's voice mode and Workout tab's voice mode are both toggled on, the one you enabled second effectively takes over — each tab does stop listening on `onDisappear`, which covers the normal case (switching tabs), but there's no explicit arbitration beyond that. Not attempted here; a real fix would need the manager to be session-aware.
+- **`Core/AI/ClaudeAPIClient.swift`** gained `completeWithTool` — forces a response through a single named tool (Anthropic's tool-use API), guaranteeing structured JSON back instead of prose. New `ClaudeTool` type (name/description/JSON-schema).
+- **`Core/AI/WorkoutVoiceCommandPrompt.swift`** — the `workout_voice_command` tool schema (action: log_set/next_exercise/progress/chat, weight_value, weight_unit, reps, same_as_previous, spoken_reply) plus `WorkoutVoiceState`, a compact snapshot of current exercise/sets-so-far/last-logged-set/remaining-exercises handed to Claude so "same as previous" and "what's next" resolve against real state instead of the model guessing.
+- **`KaiEngine.interpretWorkoutVoiceCommand`** — one Haiku tool-use call classifies the intent AND extracts weight/reps together. Haiku, not Sonnet: this fires mid-set, so speed still matters, and intent classification doesn't need Sonnet's depth — action == `chat` (genuinely open-ended questions) still escalates to a full `KaiEngine.chat` (Sonnet) call.
+- Deleted `WorkoutVoiceCommandParser.swift` (the regex version) entirely.
+- `WorkoutTabView` now calls the LLM for every recognized-shape command and speaks `spoken_reply` directly — Kai's own generated confirmation, not a hand-composed string. The actual data write (resolving "same as previous," the prescribed-weight fallback, appending the `LoggedSet`) still happens in app code, same as any voice-assistant integration acting on a parsed intent — that's state management, not the pattern-matching that was removed.
+- **Tradeoff, stated directly since it was raised before and is now the deliberate choice**: this reintroduces a network dependency and per-command latency (~1s Haiku round-trip) that the local version avoided. With no connection, voice logging won't work — same as Coach chat. That's the accepted cost of real language understanding over fixed phrasing.
+- Same sharp edge as before: `VoiceManager` is a shared singleton with one active listening session — Coach and Workout voice modes can't really both be on at once. Each stops listening on `onDisappear`, covering normal tab-switching, but there's no deeper arbitration.
 
 ### Added — A real final save for finished workouts (2026-09-13)
 

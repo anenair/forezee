@@ -104,6 +104,63 @@ final class ClaudeAPIClient {
         return try parseNonStreamResponse(data)
     }
 
+    // MARK: - Tool Use (structured output)
+
+    /// Forces Claude to respond via a single named tool, guaranteeing a
+    /// structured (JSON) result instead of free-form prose — used for real
+    /// LLM understanding of mid-workout voice commands (intent + extracted
+    /// weight/reps) without falling back to hand-rolled pattern matching.
+    func completeWithTool(
+        model: KaiModel,
+        systemPrompt: String,
+        userMessage: String,
+        tool: ClaudeTool
+    ) async throws -> [String: Any] {
+        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
+            throw ClaudeAPIError.apiKeyNotConfigured
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "max_tokens": 300,
+            "system": systemPrompt,
+            "messages": [["role": "user", "content": userMessage]],
+            "tools": [[
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.inputSchema,
+            ]],
+            "tool_choice": ["type": "tool", "name": tool.name],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeAPIError.invalidResponse
+        }
+        try validateStatusCode(httpResponse.statusCode)
+
+        return try parseToolUseResponse(data, toolName: tool.name)
+    }
+
+    private func parseToolUseResponse(_ data: Data, toolName: String) throws -> [String: Any] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = obj["content"] as? [[String: Any]],
+              let toolBlock = content.first(where: {
+                  ($0["type"] as? String) == "tool_use" && ($0["name"] as? String) == toolName
+              }),
+              let input = toolBlock["input"] as? [String: Any] else {
+            throw ClaudeAPIError.malformedResponse
+        }
+        return input
+    }
+
     // MARK: - Private
 
     private func buildRequest(
@@ -161,6 +218,16 @@ final class ClaudeAPIClient {
         default: throw ClaudeAPIError.httpError(statusCode: code)
         }
     }
+}
+
+// MARK: - ClaudeTool
+
+/// A single tool definition for Claude's tool-use API — see `completeWithTool`.
+struct ClaudeTool {
+    let name: String
+    let description: String
+    /// JSON Schema object (the Anthropic API's `input_schema`).
+    let inputSchema: [String: Any]
 }
 
 // MARK: - ClaudeAPIError

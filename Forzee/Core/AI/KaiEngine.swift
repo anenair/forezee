@@ -203,6 +203,40 @@ final class KaiEngine: ObservableObject {
         return response
     }
 
+    /// Real LLM understanding of a mid-workout voice command — no local
+    /// pattern matching. Haiku + tool use classifies the intent and extracts
+    /// weight/reps in one call; genuinely open-ended questions come back as
+    /// action == .chat for the caller to escalate to a full chat() call.
+    /// No context snapshot, same reasoning as the companion comment: this
+    /// needs to come back fast, and workout state (not sleep/calendar/weather)
+    /// is what actually matters for this decision.
+    func interpretWorkoutVoiceCommand(
+        userId: String,
+        transcript: String,
+        state: WorkoutVoiceState
+    ) async throws -> WorkoutVoiceCommandResult {
+        let model = KaiModel.haiku
+        let prompt = WorkoutVoiceCommandPrompt.build(transcript: transcript, state: state)
+
+        let input = try await apiClient.completeWithTool(
+            model: model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt,
+            tool: WorkoutVoiceCommandPrompt.tool
+        )
+        let result = WorkoutVoiceCommandResult(from: input)
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .workoutVoiceCommand,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: result.spokenReply.estimatedTokenCount
+        )
+
+        return result
+    }
+
     /// A short report after the user finishes a workout — what they actually
     /// did vs. what was prescribed, plus one thing to focus on next time.
     /// Sonnet — needs to reason over the full context snapshot, same as generation.

@@ -16,11 +16,12 @@
 //
 // Voice logging: "Hi Kai, mark a set complete, 135 lbs, 8 reps" /
 // "same as previous" / "what's my next exercise" / "how am I doing".
-// Parsed locally (WorkoutVoiceCommandParser) — no network, no LLM
-// round-trip — since this fires mid-set and can't wait on either.
-// Anything that doesn't match a known command falls back to a real
-// Kai chat call. Exercise completion still also works by tapping a
-// row; voice adds real per-set weight/reps on top of that.
+// Real LLM understanding, not pattern matching — a single Haiku
+// tool-use call (KaiEngine.interpretWorkoutVoiceCommand) classifies
+// the intent and extracts weight/reps in one round-trip. Genuinely
+// open-ended questions escalate to a full Sonnet chat call. Exercise
+// completion still also works by tapping a row; voice adds real
+// per-set weight/reps on top of that.
 // ============================================================
 
 import SwiftUI
@@ -149,16 +150,33 @@ struct WorkoutTabView: View {
         }
     }
 
+    /// Real LLM understanding — no local pattern matching. A single Haiku
+    /// tool-use call classifies the intent AND extracts weight/reps in one
+    /// round-trip (see KaiEngine.interpretWorkoutVoiceCommand); genuinely
+    /// open-ended questions escalate to a full Sonnet chat call.
     private func handleVoiceCommand(_ command: String) {
-        switch WorkoutVoiceCommandParser.parse(command) {
-        case .logSet(let details):
-            handleLogSetCommand(details)
-        case .nextExercise:
-            handleNextExerciseCommand()
-        case .progress:
-            handleProgressCommand()
-        case .unrecognized:
-            askKai(command)
+        guard let userId = appState.userId else {
+            speak("You need to be signed in for that.")
+            return
+        }
+        Task {
+            do {
+                let result = try await KaiEngine.shared.interpretWorkoutVoiceCommand(
+                    userId: userId,
+                    transcript: command,
+                    state: currentVoiceState()
+                )
+                switch result.action {
+                case .logSet:
+                    applyLogSet(result)
+                case .nextExercise, .progress:
+                    speak(result.spokenReply)
+                case .chat:
+                    askKai(command)
+                }
+            } catch {
+                speak("I couldn't understand that — try again.")
+            }
         }
     }
 
@@ -198,7 +216,60 @@ struct WorkoutTabView: View {
         loggedSets.filter { $0.exerciseId == exerciseId }.sorted { $0.setNumber < $1.setNumber }
     }
 
-    private func handleLogSetCommand(_ details: LoggedSetDetails) {
+    /// A compact snapshot of where things stand, handed to Claude so it can
+    /// resolve "same as previous" / "what's next" / "how am I doing" against
+    /// real state instead of guessing.
+    private func currentVoiceState() -> WorkoutVoiceState {
+        let totalExercises = workout?.exercises.count ?? 0
+
+        guard let exercise = currentExercise else {
+            return WorkoutVoiceState(
+                currentExerciseName: nil,
+                currentExercisePrescription: nil,
+                setsLoggedForCurrent: 0,
+                totalSetsForCurrent: nil,
+                lastLoggedSetDescription: nil,
+                remainingExerciseNames: [],
+                totalExercises: totalExercises,
+                completedExercises: completedExerciseIds.count
+            )
+        }
+
+        let existing = sets(for: exercise.id)
+        let remaining = workout?.exercises
+            .filter { $0.id != exercise.id && !completedExerciseIds.contains($0.id) }
+            .map(\.name) ?? []
+
+        return WorkoutVoiceState(
+            currentExerciseName: exercise.name,
+            currentExercisePrescription: "\(exercise.sets) sets of \(exercise.reps)",
+            setsLoggedForCurrent: existing.count,
+            totalSetsForCurrent: exercise.sets,
+            lastLoggedSetDescription: existing.last.map(describe),
+            remainingExerciseNames: remaining,
+            totalExercises: totalExercises,
+            completedExercises: completedExerciseIds.count
+        )
+    }
+
+    private func describe(_ set: LoggedSet) -> String {
+        var text = ""
+        if let weight = set.weightValue, let unit = set.weightUnit {
+            text = "\(formatted(weight)) \(unit.spokenName)"
+        }
+        if let reps = set.reps {
+            text += text.isEmpty ? "\(reps) reps" : ", \(reps) reps"
+        }
+        return text.isEmpty ? "no weight or reps recorded" : text
+    }
+
+    /// Applies the structured decision to actual state — this is normal app
+    /// logic reacting to a parsed command, the same as any voice-assistant
+    /// integration, not a return to pattern matching (the understanding
+    /// itself happened in interpretWorkoutVoiceCommand). "Same as previous"
+    /// and the prescribed-weight fallback are resolved here rather than
+    /// trusted blind from the model, since this is the data that gets saved.
+    private func applyLogSet(_ result: WorkoutVoiceCommandResult) {
         guard let exercise = currentExercise else {
             speak("You've already finished every exercise in this workout.")
             return
@@ -207,67 +278,34 @@ struct WorkoutTabView: View {
         let existing = sets(for: exercise.id)
         let setNumber = existing.count + 1
 
-        var weightValue = details.weightValue
-        var weightUnit = details.weightUnit
-        var reps = details.reps
+        var weightValue = result.weightValue
+        var weightUnit = result.weightUnit
+        var reps = result.reps
 
-        if details.sameAsPrevious, let last = existing.last {
+        if result.sameAsPrevious, let last = existing.last {
             weightValue = weightValue ?? last.weightValue
             weightUnit = weightUnit ?? last.weightUnit
             reps = reps ?? last.reps
         }
-        // Nothing said and nothing to copy — fall back to the AI's suggested
-        // weight rather than logging a blank set.
         if weightValue == nil, let prescribed = exercise.weightKg {
             weightValue = prescribed
             weightUnit = .kg
         }
 
-        let newSet = LoggedSet(
+        loggedSets.append(LoggedSet(
             exerciseId: exercise.id,
             setNumber: setNumber,
             weightValue: weightValue,
             weightUnit: weightUnit,
             reps: reps
-        )
-        loggedSets.append(newSet)
+        ))
 
-        let justFinishedExercise = setNumber >= exercise.sets
-        if justFinishedExercise {
+        if setNumber >= exercise.sets {
             completedExerciseIds.insert(exercise.id)
             fetchCompanionComment(for: exercise)
         }
 
-        var parts = ["Set \(setNumber) of \(exercise.sets) logged for \(exercise.name)."]
-        if let weightValue, let weightUnit {
-            parts.append("\(formatted(weightValue)) \(weightUnit.spokenName).")
-        }
-        if let reps {
-            parts.append("\(reps) reps.")
-        }
-        if justFinishedExercise {
-            parts.append("That's the exercise done.")
-        }
-        speak(parts.joined(separator: " "))
-    }
-
-    private func handleNextExerciseCommand() {
-        guard let exercise = currentExercise else {
-            speak("That's everything — nice work.")
-            return
-        }
-        let setsDone = sets(for: exercise.id).count
-        let prefix = setsDone > 0 ? "Still on" : "Next up:"
-        speak("\(prefix) \(exercise.name), \(exercise.sets) sets of \(exercise.reps).")
-    }
-
-    private func handleProgressCommand() {
-        guard let workout else { return }
-        let totalExercises = workout.exercises.count
-        let doneExercises = completedExerciseIds.count
-        let totalSets = workout.exercises.reduce(0) { $0 + $1.sets }
-        let doneSets = loggedSets.count
-        speak("You've finished \(doneExercises) of \(totalExercises) exercises, \(doneSets) of \(totalSets) sets so far.")
+        speak(result.spokenReply.isEmpty ? "Set \(setNumber) logged for \(exercise.name)." : result.spokenReply)
     }
 
     private func formatted(_ value: Double) -> String {
