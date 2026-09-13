@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Voice-logged sets: "Hi Kai, mark a set complete" (2026-09-13)
+
+Mid-workout voice commands — logging a set, asking what's next,
+checking progress — deliberately do NOT go through `KaiEngine.chat`
+(Sonnet). A 1-3s round-trip is a bad experience mid-set, and a dead
+signal shouldn't block logging a set you just did — same offline-first
+reasoning as everything else in this thread. Instead:
+
+- **`Integrations/Voice/WorkoutVoiceCommandParser.swift`** — local, offline, no-LLM pattern matching for the fixed command set: "mark a set complete" (+ optional weight/reps), "same as previous", "what's my next exercise", "how am I doing". Anything else comes back `.unrecognized` and only then falls back to a real (network-dependent) `KaiEngine.chat` call. Not real NLU — covers the phrasings in the brief and close variants; multi-word compound numbers ("one thirty five" for 135) aren't handled, documented as a known gap rather than pretended away.
+- **`Core/Models/LoggedSet.swift`** — real per-set data (weight, unit, reps) that didn't exist before; `WorkoutTabView` previously only tracked whole-exercise completion.
+- **`WorkoutTabView`** gets its own mic toggle and wake-phrase loop (reuses `VoiceManager`/`KaiVoiceSynthesizer` from the Coach tab's voice mode, same foreground-only caveats apply). A recognized command executes immediately and speaks a short local confirmation ("Set 2 of 3 logged for Bench Press, 135 pounds, 8 reps") — no network involved. "Same as previous" copies weight/reps from the last logged set for that exercise; with nothing said and nothing to copy, falls back to the AI's suggested weight rather than logging blank.
+- Logged sets now show under each exercise, and feed the final session save: `ForzeeDataService.saveCompletedWorkout` gained a `loggedSets:` parameter and now writes real per-set `sets_log` entries (matching the schema's documented structure) instead of just an exercise-level count. Exercises completed by tapping (no voice detail) still get an approximate entry using the AI's prescribed weight, so that data isn't lost either.
+- **Known sharp edge**: `VoiceManager` is a shared singleton with one active listening session. If Coach tab's voice mode and Workout tab's voice mode are both toggled on, the one you enabled second effectively takes over — each tab does stop listening on `onDisappear`, which covers the normal case (switching tabs), but there's no explicit arbitration beyond that. Not attempted here; a real fix would need the manager to be session-aware.
+
 ### Added — A real final save for finished workouts (2026-09-13)
 
 `sessions` has had `perceived_effort`, `mood_post`, `notes`, and

@@ -14,9 +14,13 @@
 // with zero connectivity; the report needs a live network call and
 // can fail without taking the save down with it.
 //
-// MVP scope: completion is tracked per exercise, not per set —
-// good enough for a first real-world gym test; per-set logging
-// (actual reps/weight) is a natural next iteration.
+// Voice logging: "Hi Kai, mark a set complete, 135 lbs, 8 reps" /
+// "same as previous" / "what's my next exercise" / "how am I doing".
+// Parsed locally (WorkoutVoiceCommandParser) — no network, no LLM
+// round-trip — since this fires mid-set and can't wait on either.
+// Anything that doesn't match a known command falls back to a real
+// Kai chat call. Exercise completion still also works by tapping a
+// row; voice adds real per-set weight/reps on top of that.
 // ============================================================
 
 import SwiftUI
@@ -24,9 +28,12 @@ import SwiftUI
 struct WorkoutTabView: View {
 
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var voiceManager = VoiceManager.shared
+    @ObservedObject private var voiceSynthesizer = KaiVoiceSynthesizer.shared
 
     @State private var workout: GeneratedWorkout?
     @State private var completedExerciseIds: Set<UUID> = []
+    @State private var loggedSets: [LoggedSet] = []
     @State private var companionComment: String?
     @State private var report: String?
 
@@ -34,6 +41,7 @@ struct WorkoutTabView: View {
     @State private var isSavingSession = false
     @State private var didSaveSession = false
     @State private var showFeedbackSheet = false
+    @State private var isVoiceModeOn = false
     @State private var errorMessage: String?
 
     var body: some View {
@@ -49,6 +57,10 @@ struct WorkoutTabView: View {
                             emptyState
                         }
 
+                        if isVoiceModeOn {
+                            voiceStatusBar
+                        }
+
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.fzBody(13))
@@ -59,6 +71,16 @@ struct WorkoutTabView: View {
                 }
             }
             .navigationTitle("Workout")
+            .toolbar {
+                if workout != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: toggleVoiceMode) {
+                            Image(systemName: isVoiceModeOn ? "mic.fill" : "mic")
+                                .foregroundStyle(isVoiceModeOn ? Color.fzPrimary : Color.fzTextSecondary)
+                        }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showFeedbackSheet) {
             if let workout {
@@ -67,6 +89,189 @@ struct WorkoutTabView: View {
                 }
             }
         }
+        .onDisappear { stopVoiceMode() }
+    }
+
+    // MARK: - Voice Mode
+
+    private var voiceStatusBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform")
+                .foregroundStyle(Color.fzPrimary)
+                .symbolEffect(.variableColor.iterative, isActive: voiceManager.state != .idle)
+            Text(voiceStatusText)
+                .font(.fzBody(13, weight: .medium))
+                .foregroundStyle(Color.fzTextSecondary)
+            Spacer()
+        }
+    }
+
+    private var voiceStatusText: String {
+        if voiceSynthesizer.isSpeaking { return "Kai is speaking..." }
+        switch voiceManager.state {
+        case .idle:                return "Voice mode on — say \"Hi Kai\""
+        case .listeningForWake:    return "Listening for \"Hi Kai\"..."
+        case .listeningForCommand: return voiceManager.liveTranscript.isEmpty
+            ? "Go ahead — \"mark a set complete\", \"what's next\", \"how am I doing\"..."
+            : voiceManager.liveTranscript
+        }
+    }
+
+    private func toggleVoiceMode() {
+        if isVoiceModeOn {
+            stopVoiceMode()
+        } else {
+            Task { await startVoiceMode() }
+        }
+    }
+
+    private func startVoiceMode() async {
+        if !voiceManager.isAuthorized {
+            guard await voiceManager.requestAuthorization() else {
+                errorMessage = "Voice mode needs microphone and speech recognition access — enable it in Settings."
+                return
+            }
+        }
+        isVoiceModeOn = true
+        listenForWakePhrase()
+    }
+
+    private func stopVoiceMode() {
+        isVoiceModeOn = false
+        voiceManager.stopListening()
+        voiceSynthesizer.stop()
+    }
+
+    private func listenForWakePhrase() {
+        guard isVoiceModeOn else { return }
+        voiceManager.startListeningForWake { command in
+            handleVoiceCommand(command)
+        }
+    }
+
+    private func handleVoiceCommand(_ command: String) {
+        switch WorkoutVoiceCommandParser.parse(command) {
+        case .logSet(let details):
+            handleLogSetCommand(details)
+        case .nextExercise:
+            handleNextExerciseCommand()
+        case .progress:
+            handleProgressCommand()
+        case .unrecognized:
+            askKai(command)
+        }
+    }
+
+    private func speak(_ text: String) {
+        voiceSynthesizer.speak(text, isPremium: appState.subscriptionTier.isPremium) {
+            listenForWakePhrase()
+        }
+    }
+
+    private func askKai(_ command: String) {
+        guard let userId = appState.userId else {
+            speak("You need to be signed in for that.")
+            return
+        }
+        Task {
+            do {
+                try await KaiEngine.shared.chat(
+                    message: command,
+                    userId: userId,
+                    history: [],
+                    onToken: { _ in },
+                    onComplete: { reply in speak(reply.content) }
+                )
+            } catch {
+                speak("I couldn't get an answer to that — try again in the Coach tab.")
+            }
+        }
+    }
+
+    // MARK: - Voice Commands
+
+    private var currentExercise: WorkoutExercise? {
+        workout?.exercises.first { !completedExerciseIds.contains($0.id) }
+    }
+
+    private func sets(for exerciseId: UUID) -> [LoggedSet] {
+        loggedSets.filter { $0.exerciseId == exerciseId }.sorted { $0.setNumber < $1.setNumber }
+    }
+
+    private func handleLogSetCommand(_ details: LoggedSetDetails) {
+        guard let exercise = currentExercise else {
+            speak("You've already finished every exercise in this workout.")
+            return
+        }
+
+        let existing = sets(for: exercise.id)
+        let setNumber = existing.count + 1
+
+        var weightValue = details.weightValue
+        var weightUnit = details.weightUnit
+        var reps = details.reps
+
+        if details.sameAsPrevious, let last = existing.last {
+            weightValue = weightValue ?? last.weightValue
+            weightUnit = weightUnit ?? last.weightUnit
+            reps = reps ?? last.reps
+        }
+        // Nothing said and nothing to copy — fall back to the AI's suggested
+        // weight rather than logging a blank set.
+        if weightValue == nil, let prescribed = exercise.weightKg {
+            weightValue = prescribed
+            weightUnit = .kg
+        }
+
+        let newSet = LoggedSet(
+            exerciseId: exercise.id,
+            setNumber: setNumber,
+            weightValue: weightValue,
+            weightUnit: weightUnit,
+            reps: reps
+        )
+        loggedSets.append(newSet)
+
+        let justFinishedExercise = setNumber >= exercise.sets
+        if justFinishedExercise {
+            completedExerciseIds.insert(exercise.id)
+            fetchCompanionComment(for: exercise)
+        }
+
+        var parts = ["Set \(setNumber) of \(exercise.sets) logged for \(exercise.name)."]
+        if let weightValue, let weightUnit {
+            parts.append("\(formatted(weightValue)) \(weightUnit.spokenName).")
+        }
+        if let reps {
+            parts.append("\(reps) reps.")
+        }
+        if justFinishedExercise {
+            parts.append("That's the exercise done.")
+        }
+        speak(parts.joined(separator: " "))
+    }
+
+    private func handleNextExerciseCommand() {
+        guard let exercise = currentExercise else {
+            speak("That's everything — nice work.")
+            return
+        }
+        let setsDone = sets(for: exercise.id).count
+        let prefix = setsDone > 0 ? "Still on" : "Next up:"
+        speak("\(prefix) \(exercise.name), \(exercise.sets) sets of \(exercise.reps).")
+    }
+
+    private func handleProgressCommand() {
+        guard let workout else { return }
+        let totalExercises = workout.exercises.count
+        let doneExercises = completedExerciseIds.count
+        let totalSets = workout.exercises.reduce(0) { $0 + $1.sets }
+        let doneSets = loggedSets.count
+        speak("You've finished \(doneExercises) of \(totalExercises) exercises, \(doneSets) of \(totalSets) sets so far.")
+    }
+
+    private func formatted(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(format: "%.1f", value)
     }
 
     // MARK: - Empty State
@@ -110,7 +315,8 @@ struct WorkoutTabView: View {
                 ForEach(workout.exercises) { exercise in
                     ExerciseRow(
                         exercise: exercise,
-                        isCompleted: completedExerciseIds.contains(exercise.id)
+                        isCompleted: completedExerciseIds.contains(exercise.id),
+                        loggedSets: sets(for: exercise.id)
                     ) {
                         toggle(exercise)
                     }
@@ -201,6 +407,7 @@ struct WorkoutTabView: View {
             do {
                 workout = try await KaiEngine.shared.generateWorkout(userId: userId)
                 completedExerciseIds = []
+                loggedSets = []
                 companionComment = nil
                 report = nil
             } catch {
@@ -223,6 +430,7 @@ struct WorkoutTabView: View {
         try? await ForzeeDataService.shared.saveCompletedWorkout(
             workout,
             completedExerciseIds: completedExerciseIds,
+            loggedSets: loggedSets,
             feedback: feedback,
             userId: userId
         )
@@ -245,6 +453,7 @@ struct WorkoutTabView: View {
     private func reset() {
         workout = nil
         completedExerciseIds = []
+        loggedSets = []
         companionComment = nil
         report = nil
         didSaveSession = false
@@ -391,37 +600,64 @@ private struct SessionFeedbackSheet: View {
 private struct ExerciseRow: View {
     let exercise: WorkoutExercise
     let isCompleted: Bool
+    let loggedSets: [LoggedSet]
     let onToggle: () -> Void
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(isCompleted ? Color.fzGreen : Color.fzBorder)
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: onToggle) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(isCompleted ? Color.fzGreen : Color.fzBorder)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(exercise.name)
-                        .font(.fzBody(15, weight: .semibold))
-                        .foregroundStyle(Color.fzText)
-                        .strikethrough(isCompleted)
-                    Text(setsRepsText)
-                        .font(.fzMono(13))
-                        .foregroundStyle(Color.fzTextSecondary)
-                    if let notes = exercise.notes, !notes.isEmpty {
-                        Text(notes)
-                            .font(.fzBody(12))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(exercise.name)
+                            .font(.fzBody(15, weight: .semibold))
+                            .foregroundStyle(Color.fzText)
+                            .strikethrough(isCompleted)
+                        Text(setsRepsText)
+                            .font(.fzMono(13))
                             .foregroundStyle(Color.fzTextSecondary)
+                        if let notes = exercise.notes, !notes.isEmpty {
+                            Text(notes)
+                                .font(.fzBody(12))
+                                .foregroundStyle(Color.fzTextSecondary)
+                        }
+                    }
+
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+
+            if !loggedSets.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(loggedSets) { set in
+                        Text(loggedSetText(set))
+                            .font(.fzMono(12))
+                            .foregroundStyle(Color.fzPrimary)
                     }
                 }
-
-                Spacer()
+                .padding(.leading, 32)
             }
         }
-        .buttonStyle(.plain)
         .padding(12)
         .background(Color.fzSurfaceElevated)
         .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+    }
+
+    private func loggedSetText(_ set: LoggedSet) -> String {
+        var text = "Set \(set.setNumber):"
+        if let weight = set.weightValue, let unit = set.weightUnit {
+            let formatted = weight.truncatingRemainder(dividingBy: 1) == 0
+                ? String(Int(weight)) : String(format: "%.1f", weight)
+            text += " \(formatted) \(unit.rawValue)"
+        }
+        if let reps = set.reps {
+            text += " × \(reps)"
+        }
+        return text
     }
 
     private var setsRepsText: String {

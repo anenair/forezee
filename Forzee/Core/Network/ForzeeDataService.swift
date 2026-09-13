@@ -240,19 +240,19 @@ final class ForzeeDataService {
 
     // MARK: - Workouts (Phase 1 — logging)
 
-    /// Persists a Kai-generated workout as completed, along with which
-    /// exercises the user checked off and the user's own post-session
-    /// feedback (effort, mood, rating, notes) — the final save that closes
-    /// out a workout. Local-first via SyncManager — this is exactly the
-    /// "finished a workout with no gym WiFi" case, so it must never depend
-    /// on being online. Two queued writes: `workouts` (the plan + context
-    /// snapshot at generation time) and `sessions` (the completion record,
-    /// feedback included — one atomic local save, not a later update, since
-    /// there's no reliable server-assigned id to update back onto until
-    /// this has actually synced).
+    /// Persists a Kai-generated workout as completed: which exercises were
+    /// checked off, the actual per-set weight/reps logged (voice or manual —
+    /// see LoggedSet), and the user's post-session feedback. The final save
+    /// that closes out a workout. Local-first via SyncManager — this is
+    /// exactly the "finished a workout with no gym WiFi" case, so it must
+    /// never depend on being online. Two queued writes: `workouts` (the plan
+    /// + context snapshot at generation time) and `sessions` (the completion
+    /// record — one atomic local save, not a later update, since there's no
+    /// reliable server-assigned id to update onto until this has synced).
     func saveCompletedWorkout(
         _ workout: GeneratedWorkout,
         completedExerciseIds: Set<UUID>,
+        loggedSets: [LoggedSet],
         feedback: SessionFeedback,
         userId: String
     ) async throws {
@@ -268,14 +268,45 @@ final class ForzeeDataService {
         )
         await SyncManager.shared.enqueue(table: "workouts", record: workoutRecord)
 
+        let setRecords: [LoggedSetRecord] = workout.exercises
+            .filter { completedExerciseIds.contains($0.id) }
+            .flatMap { exercise -> [LoggedSetRecord] in
+                let voiceLogged = loggedSets
+                    .filter { $0.exerciseId == exercise.id }
+                    .sorted { $0.setNumber < $1.setNumber }
+
+                guard !voiceLogged.isEmpty else {
+                    // Tap-completed with no per-set detail — one approximate
+                    // entry per prescribed set rather than losing the exercise
+                    // entirely. weightKg here is the AI's suggestion, not a
+                    // measured value.
+                    return (1...max(exercise.sets, 1)).map { setNumber in
+                        LoggedSetRecord(
+                            exerciseId: exercise.exerciseId,
+                            exerciseName: exercise.name,
+                            setNumber: setNumber,
+                            weightKg: exercise.weightKg,
+                            reps: nil
+                        )
+                    }
+                }
+                return voiceLogged.map { set in
+                    LoggedSetRecord(
+                        exerciseId: exercise.exerciseId,
+                        exerciseName: exercise.name,
+                        setNumber: set.setNumber,
+                        weightKg: set.weightValue.map { set.weightUnit == .lbs ? $0 * 0.453592 : $0 },
+                        reps: set.reps
+                    )
+                }
+            }
+
         let sessionRecord = SessionInsertRecord(
             id: UUID().uuidString,
             userId: userId,
             workoutId: workout.id.uuidString,
             durationMins: workout.estimatedDurationMins,
-            setsLog: workout.exercises
-                .filter { completedExerciseIds.contains($0.id) }
-                .map { CompletedExerciseLog(exerciseName: $0.name, setsCompleted: $0.sets) },
+            setsLog: setRecords,
             perceivedEffort: feedback.perceivedEffort,
             moodPost: feedback.mood?.rawValue,
             notes: feedback.notes?.isEmpty == false ? feedback.notes : nil,
@@ -307,16 +338,21 @@ final class ForzeeDataService {
         let userId: String
         let workoutId: String
         let durationMins: Int
-        let setsLog: [CompletedExerciseLog]
+        let setsLog: [LoggedSetRecord]
         let perceivedEffort: Int?
         let moodPost: String?
         let notes: String?
         let rating: Int?
     }
 
-    private struct CompletedExerciseLog: Encodable {
+    /// Matches the `sets_log` jsonb structure documented in forzee_schema.sql:
+    /// `[{ exercise_id, set_number, reps_completed, weight_kg, rpe }]`.
+    private struct LoggedSetRecord: Encodable {
+        let exerciseId: String?
         let exerciseName: String
-        let setsCompleted: Int
+        let setNumber: Int
+        let weightKg: Double?
+        let reps: Int?
     }
 
     // MARK: - Usage Tracking
