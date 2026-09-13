@@ -241,14 +241,19 @@ final class ForzeeDataService {
     // MARK: - Workouts (Phase 1 — logging)
 
     /// Persists a Kai-generated workout as completed, along with which
-    /// exercises the user checked off during the session. Local-first via
-    /// SyncManager — this is exactly the "finished a workout with no gym
-    /// WiFi" case, so it must never depend on being online. Two queued
-    /// writes: `workouts` (the plan + context snapshot at generation time)
-    /// and `sessions` (the completion record).
+    /// exercises the user checked off and the user's own post-session
+    /// feedback (effort, mood, rating, notes) — the final save that closes
+    /// out a workout. Local-first via SyncManager — this is exactly the
+    /// "finished a workout with no gym WiFi" case, so it must never depend
+    /// on being online. Two queued writes: `workouts` (the plan + context
+    /// snapshot at generation time) and `sessions` (the completion record,
+    /// feedback included — one atomic local save, not a later update, since
+    /// there's no reliable server-assigned id to update back onto until
+    /// this has actually synced).
     func saveCompletedWorkout(
         _ workout: GeneratedWorkout,
         completedExerciseIds: Set<UUID>,
+        feedback: SessionFeedback,
         userId: String
     ) async throws {
         let workoutRecord = WorkoutInsertRecord(
@@ -264,12 +269,17 @@ final class ForzeeDataService {
         await SyncManager.shared.enqueue(table: "workouts", record: workoutRecord)
 
         let sessionRecord = SessionInsertRecord(
+            id: UUID().uuidString,
             userId: userId,
             workoutId: workout.id.uuidString,
             durationMins: workout.estimatedDurationMins,
             setsLog: workout.exercises
                 .filter { completedExerciseIds.contains($0.id) }
-                .map { CompletedExerciseLog(exerciseName: $0.name, setsCompleted: $0.sets) }
+                .map { CompletedExerciseLog(exerciseName: $0.name, setsCompleted: $0.sets) },
+            perceivedEffort: feedback.perceivedEffort,
+            moodPost: feedback.mood?.rawValue,
+            notes: feedback.notes?.isEmpty == false ? feedback.notes : nil,
+            rating: feedback.rating
         )
         await SyncManager.shared.enqueue(table: "sessions", record: sessionRecord)
     }
@@ -293,10 +303,15 @@ final class ForzeeDataService {
     }
 
     private struct SessionInsertRecord: Encodable {
+        let id: String
         let userId: String
         let workoutId: String
         let durationMins: Int
         let setsLog: [CompletedExerciseLog]
+        let perceivedEffort: Int?
+        let moodPost: String?
+        let notes: String?
+        let rating: Int?
     }
 
     private struct CompletedExerciseLog: Encodable {

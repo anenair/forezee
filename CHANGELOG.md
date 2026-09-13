@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — A real final save for finished workouts (2026-09-13)
+
+`sessions` has had `perceived_effort`, `mood_post`, `notes`, and
+`rating` columns since the original Phase 1 schema — nothing in the
+UI ever collected them, and "Finish Workout" saved silently with no
+distinct completion moment.
+
+- **`Core/Models/SessionFeedback.swift`** — effort (1-10 RPE), mood (great/good/okay/tired/rough, matching the schema comment exactly), a 1-5 rating, optional notes.
+- **`WorkoutTabView`** — "Finish Workout" now opens a `SessionFeedbackSheet` ("How'd it go?") instead of saving immediately; "Skip" is one tap away for anyone who just wants it logged. "Save Session" there is the actual final save.
+- One atomic local write, not a later update — the session id is generated client-side up front specifically because there's no reliable server-assigned id to update back onto until a queued write has actually synced (see the sync fix below). `saveCompletedWorkout` gained a `feedback:` parameter; both queued writes (`workouts`, `sessions`) still go through `SyncManager`, so this final save is exactly as offline-safe as the rest of the flow.
+- The save and the AI report are shown as visibly separate states now: "Session saved" appears the instant the local write completes, the report fills in underneath once (if) the network call resolves — so a slow or failed report can never look like the workout didn't save.
+- Fixed a real dead-end while in there: after finishing a workout there was no way back to generating a new one without leaving the tab. Added "Start a New Workout".
+
 ### Fixed — Offline-first writes: workouts and nutrition logs (2026-09-13)
 
 Real bug, not a nice-to-have: `ForzeeDataService` wrote straight to
