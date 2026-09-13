@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Coach Mode: FSD-style autonomy levels for Kai (2026-09-13)
+
+- New onboarding step 5 ("How much should Kai reach out?") — this was already reserved in the design (`OnboardingProgressBar` and every step screen's "Step X of 5" label predate this; step 5 was never built until now).
+- Three levels, independent of fitness-level tone: **Advisory** (never initiates), **Guided** (default — proactive suggestions, user decides), **Accountability** (calls out avoidance instead of waiting to be asked).
+- `UserProfile.coachMode` / `profiles.coach_mode` column, `CoachMode` enum (`Features/Onboarding/OnboardingViewModel.swift`), `OnboardingCoachModeView.swift`.
+- `KaiSystemPrompt.coachModeGuide(for:)` — a second tone axis alongside the existing fitness-level guide, combined per user.
+- Editable later in `SettingsView` (the onboarding screen promises "change any time in Settings" — this is that).
+- **Known limitation, called out directly in the Accountability prompt**: this only changes what Kai says when the app is opened. It cannot reach the user outside the app — there's no push notification infrastructure yet, so "Accountability" mode today is honest tone, not real proactive nagging. That's separate, larger scope.
+
 ### Added — Workout tab + gym companion (2026-09-12)
 
 - `Features/Workout/WorkoutTabView.swift` — replaces the Workout tab placeholder. Generate today's workout via `KaiEngine.generateWorkout`, check off exercises as they're done, finish to log the session and get a Sonnet-written post-workout report. Completion is tracked per exercise, not per set, for this first pass.

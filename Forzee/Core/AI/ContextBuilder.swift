@@ -130,14 +130,16 @@ final class ContextBuilder {
                 level: "novice",
                 goals: [],
                 equipment: ["bodyweight"],
-                limitations: nil
+                limitations: nil,
+                coachMode: "guided"
             )
         }
         return UserContextSnapshot.UserContext(
             level: profile.fitnessLevel,
             goals: profile.goals,
             equipment: profile.equipment,
-            limitations: profile.limitations
+            limitations: profile.limitations,
+            coachMode: profile.coachMode
         )
     }
 
@@ -186,6 +188,7 @@ struct UserContextSnapshot: Codable {
         let goals: [String]        // e.g. ["build_muscle", "lose_weight"]
         let equipment: [String]    // e.g. ["full_gym"]
         let limitations: String?   // free text — e.g. "left knee discomfort"
+        let coachMode: String      // advisory | guided | accountability
     }
 
     struct RecentContext: Codable {

@@ -18,6 +18,7 @@ struct SettingsView: View {
 
     @State private var showPaywall = false
     @State private var isSigningOut = false
+    @State private var coachMode: CoachMode = .guided
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,7 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
                         subscriptionCard
+                        coachModeCard
                         integrationsCard
                         signOutButton
                     }
@@ -36,6 +38,9 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task {
                 await PurchaseManager.shared.refreshCustomerInfo(userId: appState.userId)
+                if let saved = appState.userProfile?.coachMode, let mode = CoachMode(rawValue: saved) {
+                    coachMode = mode
+                }
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView()
@@ -75,6 +80,57 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: ForzeeRadius.card)
                 .strokeBorder(Color.fzBorder, lineWidth: 1)
         )
+    }
+
+    // MARK: - Coach Mode
+
+    private var coachModeCard: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
+            Text("How Kai Reaches Out")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+
+            VStack(spacing: 8) {
+                ForEach(CoachMode.allCases) { mode in
+                    Button {
+                        coachMode = mode
+                        Task { await saveCoachMode(mode) }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mode.title)
+                                    .font(.fzBody(14, weight: .semibold))
+                                    .foregroundStyle(Color.fzText)
+                                Text(mode.subtitle)
+                                    .font(.fzBody(12))
+                                    .foregroundStyle(Color.fzTextSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: coachMode == mode ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(coachMode == mode ? Color.fzPrimary : Color.fzBorder)
+                        }
+                        .padding(12)
+                        .background(Color.fzSurfaceElevated)
+                        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(ForzeeSpacing.cardPadding)
+        .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
+    }
+
+    private func saveCoachMode(_ mode: CoachMode) async {
+        guard let userId = appState.userId else { return }
+        try? await ForzeeDataService.shared.updateProfile(["coach_mode": mode.rawValue], userId: userId)
+        appState.userProfile?.coachMode = mode.rawValue
     }
 
     // MARK: - Integrations

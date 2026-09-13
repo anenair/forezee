@@ -31,6 +31,9 @@ struct UserProfile: Identifiable, Codable, Equatable {
     /// Preferred workout days.
     var preferredDays: [String]       // e.g. ["monday", "wednesday", "friday"]
 
+    /// How much Kai initiates contact. advisory | guided | accountability
+    var coachMode: String
+
     /// Preferred session duration in minutes.
     var preferredDurationMins: Int
 
@@ -63,6 +66,7 @@ struct UserProfile: Identifiable, Codable, Equatable {
         case goals
         case equipment
         case preferredDays         = "preferred_days"
+        case coachMode             = "coach_mode"
         case preferredDurationMins = "preferred_duration_mins"
         case limitations
         case onboardingComplete    = "onboarding_complete"
@@ -87,6 +91,7 @@ extension UserProfile {
             goals: [],
             equipment: ["bodyweight"],
             preferredDays: [],
+            coachMode: "guided",
             preferredDurationMins: 45,
             limitations: nil,
             onboardingComplete: false,

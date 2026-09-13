@@ -35,6 +35,10 @@ create table public.profiles (
   -- Preferred workout days e.g. ["monday", "wednesday", "friday"]
   preferred_days text[] default '{}',
 
+  -- How much Kai initiates contact vs. waits to be asked
+  -- advisory | guided | accountability
+  coach_mode text not null default 'guided',
+
   -- Preferred session duration in minutes
   preferred_duration_mins int default 45,
 
