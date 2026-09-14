@@ -1,8 +1,11 @@
 // ============================================================
-// OnboardingWelcomeView.swift
-// Forzee — Features/Onboarding
+// AuthWelcomeView.swift
+// Forzee — Features/Auth
 //
 // Design reference: forezee.pen → "2. Onboarding Welcome" (v2Yku)
+// (originally built for onboarding, moved here — it's the real
+// entry point since auth gates onboarding, not the other way
+// around: RootView shows AuthFlowView while !isAuthenticated)
 //
 // Layout (top → bottom):
 //   - Status bar (system)
@@ -18,7 +21,7 @@
 
 import SwiftUI
 
-struct OnboardingWelcomeView: View {
+struct AuthWelcomeView: View {
 
     let onGetStarted: () -> Void
     let onAlreadyHaveAccount: () -> Void
@@ -69,5 +72,5 @@ struct OnboardingWelcomeView: View {
 }
 
 #Preview {
-    OnboardingWelcomeView(onGetStarted: {}, onAlreadyHaveAccount: {})
+    AuthWelcomeView(onGetStarted: {}, onAlreadyHaveAccount: {})
 }

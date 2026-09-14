@@ -22,8 +22,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if !appState.isAuthenticated {
-                // TODO: Replace with AuthView once designed + implemented
-                AuthPlaceholderView()
+                AuthFlowView()
             } else if !appState.onboardingComplete {
                 OnboardingFlowView()
             } else {
@@ -40,22 +39,6 @@ struct RootView: View {
                 try? await Task.sleep(for: .seconds(periodicSyncInterval))
                 await SyncManager.shared.syncPendingWrites()
             }
-        }
-    }
-}
-
-// MARK: - Placeholders (removed once real screens are implemented)
-
-private struct AuthPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(.primary)
-            Text("Forzee")
-                .font(.largeTitle.bold())
-            Text("Auth screen coming soon.")
-                .foregroundStyle(.secondary)
         }
     }
 }
