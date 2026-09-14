@@ -346,6 +346,26 @@ final class ForzeeDataService {
         await SyncManager.shared.enqueue(table: "sessions", record: sessionRecord)
     }
 
+    /// Fetch recent completed sessions (most recent first), joined with the
+    /// originating workout's name/type via a PostgREST embed — one round
+    /// trip instead of N+1 lookups. Powers the Progress tab's history feed
+    /// and per-exercise history (Workout tab "History" button), both of
+    /// which just filter/aggregate this same result set client-side rather
+    /// than needing their own bespoke queries.
+    func fetchSessionHistory(userId: String, limit: Int = 30) async throws -> [SessionHistoryEntry] {
+        let response = try await client
+            .from("sessions")
+            .select("*, workouts(name, workout_type)")
+            .eq("user_id", value: userId)
+            .order("started_at", ascending: false)
+            .limit(limit)
+            .execute()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([SessionHistoryEntry].self, from: response.data)
+    }
+
     /// Direct, immediate network insert — used only by SyncManager when
     /// actually uploading a queued write. Never call this straight from a
     /// view or view model; that would defeat the offline-first guarantee.
@@ -404,6 +424,74 @@ final class ForzeeDataService {
             .from("usage_tracking")
             .insert(payload)
             .execute()
+    }
+}
+
+// MARK: - SessionHistoryEntry
+
+/// A completed session as read back from Supabase, with its originating
+/// workout's name/type embedded. Mirrors `LoggedSetRecord`'s shape above —
+/// `sets_log` was written with `convertToSnakeCase`, so it decodes the same
+/// way in reverse.
+struct SessionHistoryEntry: Codable, Identifiable {
+    let id: String
+    let workoutId: String?
+    let startedAt: Date
+    let completedAt: Date?
+    let durationMins: Int?
+    let setsLog: [SessionSetEntry]
+    let rating: Int?
+    let workout: SessionWorkoutInfo?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workoutId = "workout_id"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+        case durationMins = "duration_mins"
+        case setsLog = "sets_log"
+        case rating
+        case workout = "workouts"
+    }
+
+    /// Distinct exercises touched in this session.
+    var exerciseCount: Int {
+        Set(setsLog.compactMap(\.exerciseName)).count
+    }
+
+    /// Σ weight × reps across every logged set — nil weight/reps (a
+    /// tap-completed exercise with no per-set detail) contributes 0, not a
+    /// crash, so an approximate session still shows a real if partial total.
+    var totalVolumeKg: Double {
+        setsLog.reduce(0) { $0 + ($1.weightKg ?? 0) * Double($1.reps ?? 0) }
+    }
+}
+
+struct SessionSetEntry: Codable {
+    let exerciseId: String?
+    let exerciseName: String?
+    let setNumber: Int?
+    let weightKg: Double?
+    let reps: Int?
+    let restSecs: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case exerciseId = "exercise_id"
+        case exerciseName = "exercise_name"
+        case setNumber = "set_number"
+        case weightKg = "weight_kg"
+        case reps
+        case restSecs = "rest_secs"
+    }
+}
+
+struct SessionWorkoutInfo: Codable {
+    let name: String
+    let workoutType: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case workoutType = "workout_type"
     }
 }
 

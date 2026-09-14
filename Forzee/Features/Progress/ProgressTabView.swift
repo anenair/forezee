@@ -2,13 +2,13 @@
 // ProgressTabView.swift
 // Forzee — Features/Progress
 //
-// Phase 2: manual nutrition logging. Named ProgressTabView
-// (not ProgressView) to avoid shadowing SwiftUI.ProgressView
-// throughout the module.
+// Nutrition logging (Phase 2) plus the workout history feed
+// (roadmap Phase 1 "Log tab") — a chronological read of past
+// sessions using data Forzee already writes via saveCompletedWorkout,
+// no new tables. Named ProgressTabView (not ProgressView) to avoid
+// shadowing SwiftUI.ProgressView throughout the module.
 //
-// Full progress tracking (photos, PRs, charts) stays out of
-// scope here — this ships the nutrition half of Phase 2's
-// "Nutrition / meal tracking" checklist item.
+// Full progress tracking (photos, charts) stays out of scope here.
 // ============================================================
 
 import SwiftUI
@@ -21,6 +21,9 @@ struct ProgressTabView: View {
     @State private var isLoading = false
     @State private var showLogSheet = false
 
+    @State private var sessions: [SessionHistoryEntry] = []
+    @State private var isLoadingSessions = false
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -30,18 +33,54 @@ struct ProgressTabView: View {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
                         nutritionCard
                         ForzeeButton(title: "Log a Meal") { showLogSheet = true }
+                        workoutHistorySection
                     }
                     .padding(ForzeeSpacing.screenPadding)
                 }
             }
             .navigationTitle("Progress")
-            .task { await loadSummary() }
+            .task {
+                await loadSummary()
+                await loadSessions()
+            }
             .sheet(isPresented: $showLogSheet) {
                 LogMealSheet(userId: appState.userId) {
                     Task { await loadSummary() }
                 }
             }
         }
+    }
+
+    // MARK: - Workout History
+
+    private var workoutHistorySection: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
+            Text("Recent Workouts")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+
+            if isLoadingSessions {
+                ProgressView().tint(Color.fzPrimary)
+            } else if sessions.isEmpty {
+                Text("No workouts logged yet — finish one from the Workout tab and it'll show up here.")
+                    .font(.fzBody(14))
+                    .foregroundStyle(Color.fzTextSecondary)
+            } else {
+                VStack(spacing: ForzeeSpacing.smallGap) {
+                    ForEach(sessions) { session in
+                        SessionHistoryRow(session: session)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadSessions() async {
+        guard let userId = appState.userId else { return }
+        isLoadingSessions = true
+        defer { isLoadingSessions = false }
+        sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 10)) ?? []
     }
 
     private var nutritionCard: some View {
@@ -98,6 +137,52 @@ private struct StatColumn: View {
                 .font(.fzBody(12))
                 .foregroundStyle(Color.fzTextSecondary)
         }
+    }
+}
+
+// MARK: - SessionHistoryRow
+
+/// One row in the workout history feed: date, exercise count, total volume,
+/// duration — all read straight off the session's own `sets_log`, no extra
+/// query per row.
+private struct SessionHistoryRow: View {
+    let session: SessionHistoryEntry
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.workout?.name ?? "Workout")
+                    .font(.fzBody(14, weight: .semibold))
+                    .foregroundStyle(Color.fzText)
+                Text(session.startedAt.formatted(date: .abbreviated, time: .omitted))
+                    .font(.fzBody(12))
+                    .foregroundStyle(Color.fzTextSecondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(session.exerciseCount) exercises")
+                    .font(.fzMono(12))
+                    .foregroundStyle(Color.fzTextSecondary)
+                if session.totalVolumeKg > 0 {
+                    Text("\(Int(session.totalVolumeKg)) kg vol")
+                        .font(.fzMono(12))
+                        .foregroundStyle(Color.fzTextSecondary)
+                } else if let mins = session.durationMins {
+                    Text("\(mins) min")
+                        .font(.fzMono(12))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.chip)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
     }
 }
 
