@@ -92,6 +92,18 @@ struct WorkoutTabView: View {
             }
         }
         .onDisappear { stopVoiceMode() }
+        .onAppear {
+            // Picks up a workout the Coach chat's "Build Workout" button just
+            // created, since that sets AppState.activeWorkout rather than this
+            // view's own local state.
+            if workout == nil, let active = appState.activeWorkout {
+                workout = active
+                completedExerciseIds = []
+                loggedSets = []
+                companionComment = nil
+                report = nil
+            }
+        }
     }
 
     // MARK: - Voice Mode
@@ -466,6 +478,7 @@ struct WorkoutTabView: View {
             defer { isGenerating = false }
             do {
                 workout = try await KaiEngine.shared.generateWorkout(userId: userId)
+                appState.activeWorkout = workout
                 completedExerciseIds = []
                 loggedSets = []
                 companionComment = nil
@@ -498,6 +511,7 @@ struct WorkoutTabView: View {
         isSavingSession = false
         showFeedbackSheet = false
         didSaveSession = true
+        appState.activeWorkout = nil  // completed — no longer "active"
 
         do {
             report = try await KaiEngine.shared.generateWorkoutReport(
@@ -512,6 +526,7 @@ struct WorkoutTabView: View {
 
     private func reset() {
         workout = nil
+        appState.activeWorkout = nil
         completedExerciseIds = []
         loggedSets = []
         companionComment = nil

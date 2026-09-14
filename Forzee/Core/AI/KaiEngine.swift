@@ -249,6 +249,48 @@ final class KaiEngine: ObservableObject {
         return result
     }
 
+    /// Extracts a structured workout from a chat conversation — the "Build
+    /// Workout" button in Coach chat. Returns nil if the conversation
+    /// doesn't contain a clear, specific plan yet (found_plan == false, or
+    /// the model omitted a required field for a plan it claimed to find).
+    func extractWorkoutFromChat(userId: String, history: [KaiMessage]) async throws -> GeneratedWorkout? {
+        let model = KaiModel.haiku
+        let prompt = WorkoutExtractionPrompt.build(history: history)
+
+        let input = try await apiClient.completeWithTool(
+            model: model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt,
+            tool: WorkoutExtractionPrompt.tool
+        )
+
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: .workoutExtraction,
+            model: model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: 0
+        )
+
+        guard input["found_plan"] as? Bool == true else { return nil }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: input) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let decoded = try? decoder.decode(GeneratedWorkout.self, from: data) else { return nil }
+
+        let context = await contextBuilder.buildSnapshot(userId: userId)
+        return GeneratedWorkout(
+            id: decoded.id,
+            name: decoded.name,
+            workoutType: decoded.workoutType,
+            estimatedDurationMins: decoded.estimatedDurationMins,
+            coachingNote: decoded.coachingNote,
+            exercises: decoded.exercises,
+            contextSnapshot: context
+        )
+    }
+
     /// A short report after the user finishes a workout — what they actually
     /// did vs. what was prescribed, plus one thing to focus on next time.
     /// Sonnet — needs to reason over the full context snapshot, same as generation.
