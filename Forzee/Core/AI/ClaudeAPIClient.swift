@@ -114,7 +114,8 @@ final class ClaudeAPIClient {
         model: KaiModel,
         systemPrompt: String,
         userMessage: String,
-        tool: ClaudeTool
+        tool: ClaudeTool,
+        maxTokens: Int = 300
     ) async throws -> [String: Any] {
         guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
             throw ClaudeAPIError.apiKeyNotConfigured
@@ -128,7 +129,7 @@ final class ClaudeAPIClient {
 
         let body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": 300,
+            "max_tokens": maxTokens,
             "system": systemPrompt,
             "messages": [["role": "user", "content": userMessage]],
             "tools": [[
