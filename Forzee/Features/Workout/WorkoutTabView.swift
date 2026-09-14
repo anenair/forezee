@@ -932,14 +932,19 @@ private struct SetInputRow: View {
             HStack(spacing: 4) {
                 fieldBox(text: $weightText, placeholder: "wt", keyboard: .decimalPad, width: 44)
 
-                Picker("", selection: $unit) {
-                    Text("lb").tag(WeightUnit.lbs)
-                    Text("kg").tag(WeightUnit.kg)
+                // A native Picker(.menu) here would wrap its label vertically,
+                // letter by letter, once squeezed this narrow — no amount of
+                // .fixedSize() kept it from happening. A plain tap-to-toggle
+                // button has no menu chrome to get squeezed, so it can't.
+                Button(action: { unit = unit == .lbs ? .kg : .lbs }) {
+                    Text(unit == .lbs ? "lb" : "kg")
+                        .font(.fzMono(11, weight: .medium))
+                        .foregroundStyle(Color.fzTextSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(Color.fzSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
                 }
-                .pickerStyle(.menu)
-                .font(.fzBody(11))
-                .tint(Color.fzTextSecondary)
-                .fixedSize()
+                .buttonStyle(.plain)
             }
             .frame(width: Self.weightColumnWidth, alignment: .leading)
 
