@@ -52,7 +52,13 @@ enum InsightsEngine {
 
         for session in sessions {
             let lookup = muscleGroupByExerciseName(session)
-            let groupsThisSession = Set(session.setsLog.compactMap { $0.exerciseName.flatMap { lookup[$0] } })
+
+            var groupsThisSession: Set<MuscleGroup> = []
+            for set in session.setsLog {
+                guard let name = set.exerciseName, let group = lookup[name] else { continue }
+                groupsThisSession.insert(group)
+            }
+
             for group in groupsThisSession where lastTrained[group] == nil || session.startedAt > lastTrained[group]! {
                 lastTrained[group] = session.startedAt
             }
