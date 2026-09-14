@@ -95,6 +95,18 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Post Sign In / Sign Up
+
+    /// Called by SignInView/SignUpView after ForzeeDataService confirms the
+    /// auth call succeeded. Loads the profile and flips isAuthenticated —
+    /// RootView reacts and routes to onboarding or the main app depending
+    /// on onboardingComplete.
+    func completeSignIn(userId: String) async {
+        self.userId = userId
+        self.isAuthenticated = true
+        await loadProfile(userId: userId)
+    }
+
     // MARK: - Sign Out
 
     func signOut() async {

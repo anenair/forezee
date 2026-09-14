@@ -2,9 +2,11 @@
 // OnboardingFlow.swift
 // Forzee — Features/Onboarding
 //
-// Navigation coordinator for the full onboarding sequence:
+// Navigation coordinator for the full onboarding sequence. Runs
+// only once AppState.isAuthenticated is true (see RootView) —
+// account creation/sign-in happens beforehand in AuthFlowView:
 //
-//   Splash → Welcome → Step 1 (Fitness Level) → Step 2 (Goals)
+//   Splash → Step 1 (Fitness Level) → Step 2 (Goals)
 //   → Step 3 (Equipment) → Step 4 (Schedule) → Step 5 (Coach Mode)
 //   → Permissions → Meet Kai → [App Main Tab View]
 //
@@ -19,14 +21,13 @@ import SwiftUI
 
 enum OnboardingStep: Int, CaseIterable {
     case splash        = 0
-    case welcome       = 1
-    case fitnessLevel  = 2
-    case goals         = 3
-    case equipment     = 4
-    case schedule      = 5
-    case coachMode     = 6
-    case permissions   = 7
-    case meetKai       = 8
+    case fitnessLevel  = 1
+    case goals         = 2
+    case equipment     = 3
+    case schedule      = 4
+    case coachMode     = 5
+    case permissions   = 6
+    case meetKai       = 7
 
     var showsProgressBar: Bool {
         switch self {
@@ -49,7 +50,7 @@ enum OnboardingStep: Int, CaseIterable {
 
     var showsBackButton: Bool {
         switch self {
-        case .welcome, .fitnessLevel, .goals, .equipment, .schedule: return false
+        case .fitnessLevel, .goals, .equipment, .schedule: return false
         case .permissions: return true
         default: return false
         }
@@ -93,12 +94,6 @@ struct OnboardingFlowView: View {
         switch step {
         case .splash:
             SplashView { advance() }
-
-        case .welcome:
-            OnboardingWelcomeView(
-                onGetStarted: { advance() },
-                onAlreadyHaveAccount: { /* TODO: Route to sign-in */ }
-            )
 
         case .fitnessLevel:
             OnboardingFitnessLevelView(onSelect: { advance() })
