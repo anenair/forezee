@@ -432,15 +432,18 @@ private struct BuildWorkoutRow: View {
 /// signature standing in for a generic spinner.
 private struct KaiThinkingBubble: View {
     var body: some View {
-        HStack {
-            KaiRingsView(size: 32)
-                .frame(width: 32, height: 32)
-                .padding(12)
+        HStack(alignment: .top, spacing: 8) {
+            KaiAvatar()
+
+            KaiRingsView(size: 28)
+                .frame(width: 28, height: 28)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
                 .background(Color.fzSurface)
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
-
-            Spacer(minLength: 40)
+                .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -449,19 +452,72 @@ private struct KaiThinkingBubble: View {
 private struct MessageBubble: View {
     let message: KaiMessage
 
-    var body: some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 40) }
+    /// Kai's replies are plain text with blank-line paragraph breaks (see
+    /// the system prompt's formatting rule) — rendering each as its own
+    /// block instead of one monolithic Text gives long replies actual
+    /// visual structure instead of a wall of text.
+    private var paragraphs: [String] {
+        let split = message.content
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return split.isEmpty ? [message.content] : split
+    }
 
-            Text(message.content)
-                .font(.fzBody(15))
-                .foregroundStyle(message.role == .user ? Color(hex: "0A0A0F") : Color.fzText)
-                .padding(12)
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if message.role == .assistant {
+                KaiAvatar()
+            }
+
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                        Text(paragraph)
+                            .font(.fzBody(15))
+                            .foregroundStyle(message.role == .user ? Color(hex: "0A0A0F") : Color.fzText)
+                            .lineSpacing(4)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .frame(maxWidth: 280, alignment: .leading)
                 .background(message.role == .user ? Color.fzPrimary : Color.fzSurface)
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+                .shadow(color: .black.opacity(message.role == .assistant ? 0.15 : 0), radius: 5, y: 2)
 
-            if message.role == .assistant { Spacer(minLength: 40) }
+                Text(message.createdAt, style: .time)
+                    .font(.fzBody(11))
+                    .foregroundStyle(Color.fzTextSecondary.opacity(0.55))
+                    .padding(.horizontal, 4)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+}
+
+// MARK: - KaiAvatar
+
+/// Small visual identity for Kai's messages — breaks up long back-and-forth
+/// text with something other than a generic gray box, and echoes the gold/
+/// coral gradient used in the onboarding hero and KaiRingsView.
+private struct KaiAvatar: View {
+    var body: some View {
+        Circle()
+            .fill(
+                LinearGradient(
+                    colors: [Color.fzPrimary, Color.fzCoral],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: 26, height: 26)
+            .overlay(
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color(hex: "0A0A0F"))
+            )
     }
 }
 
