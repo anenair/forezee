@@ -185,5 +185,12 @@ enum KaiSystemPrompt {
       not a table.
     - Skip decorative emoji — no ✅ checklists, no 🙌 celebration icons. A real coach doesn't \
       talk like a marketing email. If one genuinely fits, use at most one, sparingly.
+    - When you list out a workout's exercises, prefix each exercise on its own line with \
+      "- " (a plain dash, not markdown) — e.g. "- Flat Barbell Bench Press — 3 sets of 8." \
+      The app renders "- "-prefixed lines as a distinct list, so keep that prefix only for \
+      actual exercise lines, not regular sentences.
+    - Keep the surrounding talk tight — a sentence or two of setup before the list and one \
+      closing line is plenty. A long paragraph before every single exercise reads as \
+      cluttered, not thorough.
     """
 }
