@@ -150,6 +150,82 @@ final class ClaudeAPIClient {
         return try parseToolUseResponse(data, toolName: tool.name)
     }
 
+    // MARK: - Tool Use (model-driven skill discovery)
+
+    /// Hands Claude every candidate tool at once with `tool_choice: auto`
+    /// and lets the model itself decide whether any applies — the
+    /// model-layer half of skill discovery (SkillLoader handles the other
+    /// half: turning bundled .md files into Swift tool schemas with no
+    /// registration step). Unlike `completeWithTool`, Claude is free to
+    /// reply with plain text instead of calling a tool — that's not a
+    /// failure, it means none of the candidates fit this message.
+    func completeWithTools(
+        model: KaiModel,
+        systemPrompt: String,
+        messages: [KaiMessage],
+        tools: [ClaudeTool],
+        maxTokens: Int = 1024
+    ) async throws -> ClaudeToolChoiceResult {
+        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
+            throw ClaudeAPIError.apiKeyNotConfigured
+        }
+        guard !tools.isEmpty else {
+            // No skills loaded — same shape as "Claude chose not to use a tool."
+            let text = try await complete(
+                model: model,
+                systemPrompt: systemPrompt,
+                userMessage: messages.last?.content ?? ""
+            )
+            return .text(text)
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "max_tokens": maxTokens,
+            "system": systemPrompt,
+            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "tools": tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema] },
+            "tool_choice": ["type": "auto"],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeAPIError.invalidResponse
+        }
+        try validateStatusCode(httpResponse.statusCode)
+
+        return try parseToolChoiceResponse(data)
+    }
+
+    private func parseToolChoiceResponse(_ data: Data) throws -> ClaudeToolChoiceResult {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = obj["content"] as? [[String: Any]] else {
+            throw ClaudeAPIError.malformedResponse
+        }
+
+        // Claude can emit prose alongside a tool call, purely a tool call, or
+        // purely prose. Any tool_use block means Claude picked a skill;
+        // otherwise fall back to whatever text it assembled.
+        if let toolBlock = content.first(where: { ($0["type"] as? String) == "tool_use" }),
+           let name = toolBlock["name"] as? String,
+           let input = toolBlock["input"] as? [String: Any] {
+            return .toolUse(skillName: name, input: input)
+        }
+
+        let text = content
+            .filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        return .text(text)
+    }
+
     private func parseToolUseResponse(_ data: Data, toolName: String) throws -> [String: Any] {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = obj["content"] as? [[String: Any]],
@@ -229,6 +305,15 @@ struct ClaudeTool {
     let description: String
     /// JSON Schema object (the Anthropic API's `input_schema`).
     let inputSchema: [String: Any]
+}
+
+// MARK: - ClaudeToolChoiceResult
+
+/// The outcome of a `completeWithTools` call — Claude either picked one of
+/// the candidate tools, or replied in plain text because none applied.
+enum ClaudeToolChoiceResult {
+    case toolUse(skillName: String, input: [String: Any])
+    case text(String)
 }
 
 // MARK: - ClaudeAPIError

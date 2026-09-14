@@ -30,6 +30,7 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
                         subscriptionCard
+                        myPlanRow
                         syncStatusRow
                         coachModeCard
                         integrationsCard
@@ -84,6 +85,37 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: ForzeeRadius.card)
                 .strokeBorder(Color.fzBorder, lineWidth: 1)
         )
+    }
+
+    // MARK: - My Plan
+
+    /// Goal, equipment, training split, and the rest of what onboarding
+    /// asked once and never let the user revisit (roadmap Phase 4).
+    private var myPlanRow: some View {
+        NavigationLink(destination: MyPlanView()) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("My Plan")
+                        .font(.fzBody(15, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                    Text("Goals, equipment, training split & more")
+                        .font(.fzBody(12))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.fzTextSecondary)
+            }
+            .padding(ForzeeSpacing.cardPadding)
+            .background(Color.fzSurface)
+            .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+            .overlay(
+                RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                    .strokeBorder(Color.fzBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Sync Status

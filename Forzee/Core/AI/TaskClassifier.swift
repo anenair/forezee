@@ -43,8 +43,6 @@ final class TaskClassifier {
         case .notification:         return .haiku
         case .dailyBriefing:        return .haiku
         case .gymCompanionComment:  return .haiku  // Live in-workout remarks — speed + cost
-        case .workoutVoiceCommand:  return .haiku  // Mid-set intent classification — speed + cost
-        case .workoutExtraction:    return .haiku  // Structured extraction from existing chat — speed + cost
         }
     }
 
@@ -89,6 +87,10 @@ enum KaiTaskType: String, Codable {
     case notification        = "notification"
     case dailyBriefing       = "daily_briefing"
     case gymCompanionComment = "gym_companion_comment"
-    case workoutVoiceCommand = "workout_voice_command"
-    case workoutExtraction   = "workout_extraction"
+
+    // workout_voice_command and workout_extraction used to be cases here —
+    // both now run through the generic skills framework (KaiEngine.run(skill:)
+    // / discoverAndRunSkill) and are tracked under their bundled skill's own
+    // name string instead (see Resources/Skills/, UsageGate.recordUsage(taskType: String, ...)).
+    // A new skill needs nothing added to this enum to be tracked.
 }

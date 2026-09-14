@@ -62,6 +62,26 @@ final class UsageGate {
         inputTokens: Int,
         outputTokens: Int
     ) async {
+        await recordUsage(
+            userId: userId,
+            taskType: taskType.rawValue,
+            model: model,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens
+        )
+    }
+
+    /// Same as above, keyed by a raw task-type string instead of a
+    /// `KaiTaskType` case — what the generic skill runner uses, since a
+    /// bundled skill's own name is what usage tracks under, not a case in
+    /// this closed enum. A new skill needs nothing added here to be tracked.
+    func recordUsage(
+        userId: String,
+        taskType: String,
+        model: KaiModel,
+        inputTokens: Int,
+        outputTokens: Int
+    ) async {
         // Cost estimates (USD per million tokens, as of 2025)
         let inputCostPerMillion: Double = model == .haiku ? 0.25 : 3.00
         let outputCostPerMillion: Double = model == .haiku ? 1.25 : 15.00
@@ -71,7 +91,7 @@ final class UsageGate {
 
         let record = UsageRecord(
             userId: userId,
-            taskType: taskType.rawValue,
+            taskType: taskType,
             modelUsed: model.rawValue,
             inputTokens: inputTokens,
             outputTokens: outputTokens,

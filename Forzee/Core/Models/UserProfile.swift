@@ -41,6 +41,28 @@ struct UserProfile: Identifiable, Codable, Equatable {
     /// Fed directly to Kai's context snapshot.
     var limitations: String?
 
+    // MARK: - Training Preferences (roadmap Phase 4 "My Plan")
+    //
+    // Onboarding never asks about these — they only exist because "My Plan"
+    // in Settings does. Sensible defaults come from UserProfile.new() below,
+    // same as every other field here being editable anytime rather than
+    // frozen at signup.
+
+    /// full_body | upper_lower | push_pull_legs | body_part_split | let_kai_decide
+    var trainingSplit: String
+    /// low | moderate | high — how much Kai varies exercise selection week to week.
+    var exerciseVariability: String
+    /// Whether Kai should prescribe warm-up sets before working sets.
+    var warmupSetsEnabled: Bool
+    /// Whether Kai may structure exercises as circuits/supersets, not just sequential.
+    var circuitsSupersetsEnabled: Bool
+    /// lbs | kg — which unit the user thinks in. Doesn't change how weight is
+    /// stored (always kg internally, see WorkoutExercise.weightKg) — this is
+    /// a display/phrasing preference only.
+    var weightUnit: String
+    /// monday | sunday
+    var startOfWeek: String
+
     // MARK: - App State
 
     /// True once the user has completed the full onboarding flow.
@@ -69,6 +91,12 @@ struct UserProfile: Identifiable, Codable, Equatable {
         case coachMode             = "coach_mode"
         case preferredDurationMins = "preferred_duration_mins"
         case limitations
+        case trainingSplit         = "training_split"
+        case exerciseVariability   = "exercise_variability"
+        case warmupSetsEnabled     = "warmup_sets_enabled"
+        case circuitsSupersetsEnabled = "circuits_supersets_enabled"
+        case weightUnit            = "weight_unit"
+        case startOfWeek           = "start_of_week"
         case onboardingComplete    = "onboarding_complete"
         case subscriptionTier      = "subscription_tier"
         case subscriptionExpiresAt = "subscription_expires_at"
@@ -94,6 +122,12 @@ extension UserProfile {
             coachMode: "guided",
             preferredDurationMins: 45,
             limitations: nil,
+            trainingSplit: "let_kai_decide",
+            exerciseVariability: "moderate",
+            warmupSetsEnabled: true,
+            circuitsSupersetsEnabled: false,
+            weightUnit: "lbs",
+            startOfWeek: "monday",
             onboardingComplete: false,
             subscriptionTier: .free,
             subscriptionExpiresAt: nil,

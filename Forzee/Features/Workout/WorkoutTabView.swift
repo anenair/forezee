@@ -45,6 +45,9 @@ struct WorkoutTabView: View {
     @State private var showFeedbackSheet = false
     @State private var isVoiceModeOn = false
     @State private var errorMessage: String?
+    @State private var showEmptySessionGuard = false
+    @State private var showPlateCalculator = false
+    @State private var historyExercise: WorkoutExercise?
 
     var body: some View {
         NavigationStack {
@@ -74,6 +77,12 @@ struct WorkoutTabView: View {
             }
             .navigationTitle("Workout")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { showPlateCalculator = true }) {
+                        Image(systemName: "scalemass")
+                            .foregroundStyle(Color.fzTextSecondary)
+                    }
+                }
                 if workout != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(action: toggleVoiceMode) {
@@ -90,6 +99,18 @@ struct WorkoutTabView: View {
                     Task { await saveSession(workout, feedback: feedback) }
                 }
             }
+        }
+        .sheet(isPresented: $showPlateCalculator) {
+            PlateCalculatorSheet()
+        }
+        .sheet(item: $historyExercise) { exercise in
+            ExerciseHistorySheet(userId: appState.userId, exerciseName: exercise.name)
+        }
+        .alert("No sets logged", isPresented: $showEmptySessionGuard) {
+            Button("Resume Workout", role: .cancel) {}
+            Button("Discard Workout", role: .destructive) { reset() }
+        } message: {
+            Text("You haven't logged any sets yet — finishing now would only save the exercises you checked off, not real weights or reps.")
         }
         .onDisappear { stopVoiceMode() }
         .onAppear {
@@ -396,7 +417,8 @@ struct WorkoutTabView: View {
                                 weight: weight, unit: unit, reps: reps, restSecs: restSecs
                             )
                         },
-                        onRemoveSet: { setNumber in removeSet(exercise: exercise, setNumber: setNumber) }
+                        onRemoveSet: { setNumber in removeSet(exercise: exercise, setNumber: setNumber) },
+                        onShowHistory: { historyExercise = exercise }
                     )
                 }
             }
@@ -433,10 +455,10 @@ struct WorkoutTabView: View {
             } else {
                 ForzeeButton(
                     title: "Finish Workout",
-                    action: { showFeedbackSheet = true },
+                    action: finishOrGuard,
                     isDisabled: completedExerciseIds.isEmpty
                 )
-                ForzeeTextButton(title: "Discard & Start Over", action: reset)
+                ForzeeTextButton(title: "Discard & Start Over", action: discardOrGuard)
             }
         }
         .padding(ForzeeSpacing.cardPadding)
@@ -566,6 +588,28 @@ struct WorkoutTabView: View {
             )
         } catch {
             report = "Workout logged. (Report unavailable: \(error.localizedDescription))"
+        }
+    }
+
+    /// Cheap insurance against a stray tap: toggling exercises "complete"
+    /// with no real weight/reps behind them (see the ExerciseRow checkbox)
+    /// would otherwise let Finish silently save a session made entirely of
+    /// saveCompletedWorkout's placeholder-set fallback. Route both exits
+    /// through the same guard rather than trusting completedExerciseIds
+    /// alone to mean "there's something here."
+    private func finishOrGuard() {
+        if loggedSets.isEmpty {
+            showEmptySessionGuard = true
+        } else {
+            showFeedbackSheet = true
+        }
+    }
+
+    private func discardOrGuard() {
+        if loggedSets.isEmpty {
+            showEmptySessionGuard = true
+        } else {
+            reset()
         }
     }
 
@@ -728,6 +772,7 @@ private struct ExerciseRow: View {
     let onToggle: () -> Void
     let onLogSet: (Int, Double?, WeightUnit, Int?, Int?) -> Void  // setNumber, weight, unit, reps, restSecs
     let onRemoveSet: (Int) -> Void
+    let onShowHistory: () -> Void
 
     @State private var isExpanded = false
 
@@ -757,6 +802,14 @@ private struct ExerciseRow: View {
                 }
 
                 Spacer()
+
+                Button(action: onShowHistory) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.fzTextSecondary)
+                        .frame(width: 28, height: 32)
+                }
+                .buttonStyle(.plain)
 
                 Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() } }) {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")

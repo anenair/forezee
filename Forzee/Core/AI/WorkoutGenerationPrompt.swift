@@ -22,6 +22,12 @@ enum WorkoutGenerationPrompt {
         - Respect any limitations or injuries
         - Match the session to their fitness level and goals
         - Account for their recent training load (avoid overtraining)
+        \(trainingSplitRequirement(context.user.trainingSplit))
+        \(exerciseVariabilityRequirement(context.user.exerciseVariability))
+        \(warmupRequirement(context.user.warmupSetsEnabled))
+        \(circuitsRequirement(context.user.circuitsSupersetsEnabled))
+        - The user thinks in \(context.user.weightUnit) — phrase the coaching_note and any \
+        exercise notes accordingly, even though weight_kg is always kilograms in the JSON itself.
         """
 
         if let prefs = preferences {
@@ -52,15 +58,78 @@ enum WorkoutGenerationPrompt {
               "reps": "8-12",
               "weight_kg": null,
               "rest_secs": 90,
-              "notes": "Optional form cue or coaching note for this exercise."
+              "notes": "Optional form cue or coaching note for this exercise.",
+              "primary_muscle_group": "chest|back|shoulders|biceps|triceps|quads|hamstrings|glutes|calves|core|full_body",
+              "secondary_muscle_groups": ["triceps"]
             }
           ]
         }
+
+        primary_muscle_group is required for every exercise — pick the one group \
+        it trains most directly (a bench press is chest, not triceps, even though \
+        triceps assist). secondary_muscle_groups lists any other groups it \
+        meaningfully trains; use an empty array if there genuinely aren't any, \
+        don't pad it out. This tagging feeds the Insights tab's weekly volume \
+        and recovery tracking — get it right, don't guess.
 
         Do not include any prose before or after the JSON.
         """
 
         return prompt
+    }
+
+    // MARK: - Training Preferences (Phase 4 "My Plan")
+    //
+    // Structured fields from UserContextSnapshot.UserContext, each turned
+    // into one concrete instruction rather than left for Kai to infer from
+    // a free-text blob. No persisted "which day of the split are we on"
+    // state exists yet, so a split preference is advisory — Kai has to
+    // infer where the user left off from recent session history/coaching
+    // notes, same as it already does for everything else about continuity.
+
+    private static func trainingSplitRequirement(_ split: String) -> String {
+        switch split {
+        case "let_kai_decide":
+            return "- No fixed split requested — choose what fits today, informed by recent training."
+        case "full_body":
+            return "- The user trains full body each session — hit major muscle groups, not one region."
+        case "upper_lower":
+            return "- The user follows an upper/lower split — check recent sessions for which half " +
+                   "they last trained and continue the rotation, don't repeat the same half."
+        case "push_pull_legs":
+            return "- The user follows a push/pull/legs split — check recent sessions for where they " +
+                   "left off in the rotation and continue it (push → pull → legs → repeat)."
+        case "body_part_split":
+            return "- The user follows a body-part split (one or two muscle groups per session) — " +
+                   "check recent sessions to avoid repeating a group trained in the last day or two."
+        default:
+            return "- No fixed split requested — choose what fits today, informed by recent training."
+        }
+    }
+
+    private static func exerciseVariabilityRequirement(_ variability: String) -> String {
+        switch variability {
+        case "low":
+            return "- Keep exercise selection consistent with recent sessions where reasonable — " +
+                   "the user wants to track progress on the same lifts, not novelty."
+        case "high":
+            return "- Vary exercise selection meaningfully from recent sessions — the user wants " +
+                   "every workout to feel fresh, not a repeat of last time."
+        default: // "moderate"
+            return "- Swap in some variety from recent sessions, but don't chase novelty for its own sake."
+        }
+    }
+
+    private static func warmupRequirement(_ enabled: Bool) -> String {
+        enabled
+            ? "- Include 1-2 warm-up sets before each main lift, at lighter load than the working sets."
+            : "- Skip dedicated warm-up sets — go straight into working sets."
+    }
+
+    private static func circuitsRequirement(_ enabled: Bool) -> String {
+        enabled
+            ? "- Circuits and supersets are fine where they fit — you don't have to keep every exercise sequential."
+            : "- Keep exercises sequential, one at a time — no circuits or supersets."
     }
 }
 

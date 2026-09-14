@@ -155,7 +155,12 @@ final class ContextBuilder {
                 equipment: ["bodyweight"],
                 limitations: nil,
                 coachMode: "guided",
-                sessionLengthMinutes: 45
+                sessionLengthMinutes: 45,
+                trainingSplit: "let_kai_decide",
+                exerciseVariability: "moderate",
+                warmupSetsEnabled: true,
+                circuitsSupersetsEnabled: false,
+                weightUnit: "lbs"
             )
         }
         return UserContextSnapshot.UserContext(
@@ -164,7 +169,12 @@ final class ContextBuilder {
             equipment: profile.equipment,
             limitations: profile.limitations,
             coachMode: profile.coachMode,
-            sessionLengthMinutes: profile.preferredDurationMins
+            sessionLengthMinutes: profile.preferredDurationMins,
+            trainingSplit: profile.trainingSplit,
+            exerciseVariability: profile.exerciseVariability,
+            warmupSetsEnabled: profile.warmupSetsEnabled,
+            circuitsSupersetsEnabled: profile.circuitsSupersetsEnabled,
+            weightUnit: profile.weightUnit
         )
     }
 
@@ -215,6 +225,15 @@ struct UserContextSnapshot: Codable {
         let limitations: String?   // free text — e.g. "left knee discomfort"
         let coachMode: String      // advisory | guided | accountability
         let sessionLengthMinutes: Int  // set during onboarding, changeable in Settings
+
+        // Phase 4 "My Plan" — structured training preferences, editable
+        // anytime, feeding WorkoutGenerationPrompt directly rather than a
+        // free-text blob.
+        let trainingSplit: String            // full_body | upper_lower | push_pull_legs | body_part_split | let_kai_decide
+        let exerciseVariability: String      // low | moderate | high
+        let warmupSetsEnabled: Bool
+        let circuitsSupersetsEnabled: Bool
+        let weightUnit: String               // lbs | kg — phrasing only, storage is always kg
     }
 
     struct RecentContext: Codable {
