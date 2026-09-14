@@ -116,7 +116,13 @@ struct CoachView: View {
             }
         }
         .task { await loadBriefing() }
+        .task { await loadChatHistory() }
         .onDisappear { stopVoiceMode() }
+    }
+
+    private func loadChatHistory() async {
+        guard let userId = appState.userId else { return }
+        messages = await kaiEngine.loadRecentHistory(userId: userId)
     }
 
     // MARK: - Scrolling
