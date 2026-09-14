@@ -98,17 +98,15 @@ final class HealthKitManager: ObservableObject {
 
         guard !samples.isEmpty else { return nil }
 
-        let asleepValues: Set<Int> = {
-            if #available(iOS 16.0, *) {
-                return [
-                    HKCategoryValueSleepAnalysis.asleepCore.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepREM.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
-                ]
-            }
-            return [HKCategoryValueSleepAnalysis.asleep.rawValue]
-        }()
+        // Deployment target is iOS 18.0, so the pre-16.0 fallback (the single
+        // undifferentiated .asleep case) is unreachable dead code — drop it
+        // rather than keep referencing a deprecated symbol for no benefit.
+        let asleepValues: Set<Int> = [
+            HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+            HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+            HKCategoryValueSleepAnalysis.asleepREM.rawValue,
+            HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+        ]
 
         let asleepSamples = samples.filter { asleepValues.contains($0.value) }
         guard !asleepSamples.isEmpty else { return nil }
