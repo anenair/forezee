@@ -109,14 +109,26 @@ private struct WeeklySetTargetsCard: View {
 
     /// Most-neglected first, capped to 6 rows — the point is "what needs
     /// attention," not a full 10-row dump of every group every time.
+    /// Broken into explicit statements (rather than one chained
+    /// filter/map/sorted expression) — the compiler timed out type-checking
+    /// the all-in-one version.
     private var rows: [TargetRow] {
         let volume = InsightsEngine.weeklySetVolume(sessions: sessions)
-        return MuscleGroup.allCases
-            .filter { $0 != .fullBody }
-            .map { TargetRow(group: $0, done: volume[$0] ?? 0, target: $0.weeklySetTarget) }
-            .sorted { Double($0.done) / Double($0.target) < Double($1.done) / Double($1.target) }
-            .prefix(6)
-            .map { $0 }
+
+        var allRows: [TargetRow] = []
+        for group in MuscleGroup.allCases where group != .fullBody {
+            let done = volume[group] ?? 0
+            let target = group.weeklySetTarget
+            allRows.append(TargetRow(group: group, done: done, target: target))
+        }
+
+        allRows.sort { Self.fraction(of: $0) < Self.fraction(of: $1) }
+        return Array(allRows.prefix(6))
+    }
+
+    private static func fraction(of row: TargetRow) -> Double {
+        guard row.target > 0 else { return 0 }
+        return Double(row.done) / Double(row.target)
     }
 
     var body: some View {
@@ -192,15 +204,18 @@ private struct RecoveryCard: View {
 
     /// Stalest first — "no recent session data" sorts as stalest of all,
     /// not most-fresh, since an absent key means no data in the lookback
-    /// window, not "just trained."
+    /// window, not "just trained." Broken into explicit statements, same
+    /// reasoning as WeeklySetTargetsCard.rows above.
     private var rows: [RecoveryRow] {
         let recovery = InsightsEngine.daysSinceLastTrained(sessions: sessions)
-        return MuscleGroup.allCases
-            .filter { $0 != .fullBody }
-            .map { RecoveryRow(group: $0, daysAgo: recovery[$0]) }
-            .sorted { ($0.daysAgo ?? Int.max) > ($1.daysAgo ?? Int.max) }
-            .prefix(6)
-            .map { $0 }
+
+        var allRows: [RecoveryRow] = []
+        for group in MuscleGroup.allCases where group != .fullBody {
+            allRows.append(RecoveryRow(group: group, daysAgo: recovery[group]))
+        }
+
+        allRows.sort { ($0.daysAgo ?? Int.max) > ($1.daysAgo ?? Int.max) }
+        return Array(allRows.prefix(6))
     }
 
     var body: some View {
