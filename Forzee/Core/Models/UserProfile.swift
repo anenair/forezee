@@ -63,6 +63,42 @@ struct UserProfile: Identifiable, Codable, Equatable {
     /// monday | sunday
     var startOfWeek: String
 
+    // MARK: - Personal Profile ("About You" — a separate settings screen,
+    // not part of onboarding)
+    //
+    // Everything here is optional and nil by default — unlike the training
+    // preferences above, there's no sane universal default for someone's
+    // birth date or weight. Kai treats a nil field as "not provided," never
+    // guesses one. Auto-calculated values (age, BMI, BMR) are never stored —
+    // see PersonalProfileCalculations — they're derived fresh from these
+    // raw fields wherever they're needed.
+
+    var dateOfBirth: Date?
+    /// male | female | unspecified — asked only for BMR/calorie-estimate
+    /// formulas, which differ by biological sex; "unspecified" skips those
+    /// calculations rather than guessing.
+    var biologicalSex: String?
+    var heightCm: Double?
+    var currentWeightKg: Double?
+    var targetWeightKg: Double?
+
+    // Body composition
+    var bodyFatPercent: Double?
+    var waistCm: Double?
+    var hipCm: Double?
+
+    // Training background
+    /// under_1 | one_to_three | three_to_five | five_plus
+    var yearsTrainingBucket: String?
+    /// Free text — past programs/styles, what's worked or hasn't. Kept out
+    /// of the compact per-call context snapshot (see ContextBuilder) since
+    /// it can run long; read by Kai only where a call site explicitly pulls
+    /// it in.
+    var trainingBackgroundNotes: String?
+    /// Free text — what's actually driving them right now. Same context-
+    /// snapshot exclusion as trainingBackgroundNotes above.
+    var motivationNotes: String?
+
     // MARK: - App State
 
     /// True once the user has completed the full onboarding flow.
@@ -97,6 +133,17 @@ struct UserProfile: Identifiable, Codable, Equatable {
         case circuitsSupersetsEnabled = "circuits_supersets_enabled"
         case weightUnit            = "weight_unit"
         case startOfWeek           = "start_of_week"
+        case dateOfBirth           = "date_of_birth"
+        case biologicalSex         = "biological_sex"
+        case heightCm              = "height_cm"
+        case currentWeightKg       = "current_weight_kg"
+        case targetWeightKg        = "target_weight_kg"
+        case bodyFatPercent        = "body_fat_percent"
+        case waistCm               = "waist_cm"
+        case hipCm                 = "hip_cm"
+        case yearsTrainingBucket   = "years_training_bucket"
+        case trainingBackgroundNotes = "training_background_notes"
+        case motivationNotes       = "motivation_notes"
         case onboardingComplete    = "onboarding_complete"
         case subscriptionTier      = "subscription_tier"
         case subscriptionExpiresAt = "subscription_expires_at"
@@ -128,6 +175,17 @@ extension UserProfile {
             circuitsSupersetsEnabled: false,
             weightUnit: "lbs",
             startOfWeek: "monday",
+            dateOfBirth: nil,
+            biologicalSex: nil,
+            heightCm: nil,
+            currentWeightKg: nil,
+            targetWeightKg: nil,
+            bodyFatPercent: nil,
+            waistCm: nil,
+            hipCm: nil,
+            yearsTrainingBucket: nil,
+            trainingBackgroundNotes: nil,
+            motivationNotes: nil,
             onboardingComplete: false,
             subscriptionTier: .free,
             subscriptionExpiresAt: nil,

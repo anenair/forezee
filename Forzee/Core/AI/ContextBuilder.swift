@@ -160,7 +160,8 @@ final class ContextBuilder {
                 exerciseVariability: "moderate",
                 warmupSetsEnabled: true,
                 circuitsSupersetsEnabled: false,
-                weightUnit: "lbs"
+                weightUnit: "lbs",
+                personal: nil
             )
         }
         return UserContextSnapshot.UserContext(
@@ -174,8 +175,29 @@ final class ContextBuilder {
             exerciseVariability: profile.exerciseVariability,
             warmupSetsEnabled: profile.warmupSetsEnabled,
             circuitsSupersetsEnabled: profile.circuitsSupersetsEnabled,
-            weightUnit: profile.weightUnit
+            weightUnit: profile.weightUnit,
+            personal: buildPersonalProfile(from: profile)
         )
+    }
+
+    /// nil when the user hasn't entered anything on "About You" — omits the
+    /// whole `personal` key from the snapshot rather than sending an object
+    /// full of nulls on every call.
+    private func buildPersonalProfile(from profile: UserProfile) -> UserContextSnapshot.UserContext.PersonalProfile? {
+        let sex = profile.biologicalSex == "unspecified" ? nil : profile.biologicalSex
+        let personal = UserContextSnapshot.UserContext.PersonalProfile(
+            age: profile.age,
+            biologicalSex: sex,
+            heightCm: profile.heightCm,
+            currentWeightKg: profile.currentWeightKg,
+            targetWeightKg: profile.targetWeightKg,
+            bodyFatPercent: profile.bodyFatPercent,
+            yearsTrainingBucket: profile.yearsTrainingBucket
+        )
+        let hasAnyValue = personal.age != nil || personal.biologicalSex != nil || personal.heightCm != nil
+            || personal.currentWeightKg != nil || personal.targetWeightKg != nil
+            || personal.bodyFatPercent != nil || personal.yearsTrainingBucket != nil
+        return hasAnyValue ? personal : nil
     }
 
     private func buildRecentContext(
@@ -234,6 +256,24 @@ struct UserContextSnapshot: Codable {
         let warmupSetsEnabled: Bool
         let circuitsSupersetsEnabled: Bool
         let weightUnit: String               // lbs | kg — phrasing only, storage is always kg
+
+        // "About You" — a separate settings screen (not onboarding, not My
+        // Plan). Omitted entirely (not just null fields) when the user
+        // hasn't filled any of it in — see ContextBuilder.buildPersonalProfile.
+        // The two free-text fields (training background, motivation) are
+        // deliberately NOT here — see AboutYouView's own header comment for
+        // why they're kept out of this per-call snapshot.
+        let personal: PersonalProfile?
+
+        struct PersonalProfile: Codable {
+            let age: Int?
+            let biologicalSex: String?          // male | female — "unspecified" is dropped, not passed through
+            let heightCm: Double?
+            let currentWeightKg: Double?
+            let targetWeightKg: Double?
+            let bodyFatPercent: Double?
+            let yearsTrainingBucket: String?    // under_1 | one_to_three | three_to_five | five_plus
+        }
     }
 
     struct RecentContext: Codable {

@@ -30,6 +30,7 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
                         subscriptionCard
+                        aboutYouRow
                         myPlanRow
                         syncStatusRow
                         coachModeCard
@@ -85,6 +86,38 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: ForzeeRadius.card)
                 .strokeBorder(Color.fzBorder, lineWidth: 1)
         )
+    }
+
+    // MARK: - About You
+
+    /// A personal profile, separate from My Plan below — who the user is
+    /// (age, sex, height, weight, training background), not what kind of
+    /// workouts they want. Not part of onboarding; exists only here.
+    private var aboutYouRow: some View {
+        NavigationLink(destination: AboutYouView()) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("About You")
+                        .font(.fzBody(15, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                    Text("Age, height, weight, training background")
+                        .font(.fzBody(12))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.fzTextSecondary)
+            }
+            .padding(ForzeeSpacing.cardPadding)
+            .background(Color.fzSurface)
+            .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+            .overlay(
+                RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                    .strokeBorder(Color.fzBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - My Plan

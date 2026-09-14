@@ -28,6 +28,7 @@ enum WorkoutGenerationPrompt {
         \(circuitsRequirement(context.user.circuitsSupersetsEnabled))
         - The user thinks in \(context.user.weightUnit) — phrase the coaching_note and any \
         exercise notes accordingly, even though weight_kg is always kilograms in the JSON itself.
+        \(personalProfileRequirement(context.user.personal))
         """
 
         if let prefs = preferences {
@@ -130,6 +131,16 @@ enum WorkoutGenerationPrompt {
         enabled
             ? "- Circuits and supersets are fine where they fit — you don't have to keep every exercise sequential."
             : "- Keep exercises sequential, one at a time — no circuits or supersets."
+    }
+
+    /// Empty string (no extra line) when the user hasn't filled in "About
+    /// You" at all — nothing to reference, and the context JSON already
+    /// omits the whole `personal` object in that case (see ContextBuilder).
+    private static func personalProfileRequirement(_ personal: UserContextSnapshot.UserContext.PersonalProfile?) -> String {
+        guard personal != nil else { return "" }
+        return "- Their age/sex/height/weight are in the context above where provided — use them to keep " +
+               "load and volume appropriate (e.g. don't assume a 55-year-old wants the same starting loads " +
+               "as a 22-year-old), but never mention BMI, body fat %, or weight judgmentally in the coaching_note."
     }
 }
 

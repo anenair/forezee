@@ -60,6 +60,30 @@ create table public.profiles (
   -- monday | sunday
   start_of_week text not null default 'monday',
 
+  -- Personal profile ("About You" settings screen — separate from
+  -- onboarding, separate from My Plan's training preferences above).
+  -- All nullable, no defaults: unlike the training preferences above,
+  -- there's no sane universal default for someone's birth date or weight.
+  -- date_of_birth is timestamptz (not a plain `date`) purely so it decodes
+  -- through the same .iso8601 JSONDecoder strategy every other timestamp
+  -- on this table already uses in ForzeeDataService.fetchProfile — a plain
+  -- `date` column round-trips as "1990-05-14" with no time component, which
+  -- that decoder rejects outright.
+  date_of_birth timestamp with time zone,
+  -- male | female | unspecified — asked only for BMR/calorie-estimate
+  -- formulas, which differ by biological sex.
+  biological_sex text,
+  height_cm numeric,
+  current_weight_kg numeric,
+  target_weight_kg numeric,
+  body_fat_percent numeric,
+  waist_cm numeric,
+  hip_cm numeric,
+  -- under_1 | one_to_three | three_to_five | five_plus
+  years_training_bucket text,
+  training_background_notes text,
+  motivation_notes text,
+
   -- Onboarding complete flag
   onboarding_complete boolean default false,
 
