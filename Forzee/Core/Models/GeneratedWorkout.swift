@@ -46,6 +46,29 @@ struct GeneratedWorkout: Identifiable, Codable {
         self.exercises = exercises
         self.contextSnapshot = contextSnapshot
     }
+
+    // MARK: - Decodable
+    //
+    // Custom init: Claude's JSON response (see WorkoutGenerationPrompt) never
+    // includes an "id" field — it's not something the model should invent —
+    // so the auto-synthesized Decodable, which would require it, always
+    // failed to decode a real generation. Every other field decodes exactly
+    // as auto-synthesis would; only `id` gets a fresh UUID when absent.
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, workoutType, estimatedDurationMins, coachingNote, exercises, contextSnapshot
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        workoutType = try container.decode(String.self, forKey: .workoutType)
+        estimatedDurationMins = try container.decode(Int.self, forKey: .estimatedDurationMins)
+        coachingNote = try container.decodeIfPresent(String.self, forKey: .coachingNote)
+        exercises = try container.decode([WorkoutExercise].self, forKey: .exercises)
+        contextSnapshot = try container.decodeIfPresent(UserContextSnapshot.self, forKey: .contextSnapshot)
+    }
 }
 
 // MARK: - WorkoutExercise
@@ -78,6 +101,27 @@ struct WorkoutExercise: Identifiable, Codable {
         self.weightKg = weightKg
         self.restSecs = restSecs
         self.notes = notes
+    }
+
+    // MARK: - Decodable
+    //
+    // Same reasoning as GeneratedWorkout above — Claude's exercise JSON never
+    // includes "id", so it needs a fresh UUID rather than a required field.
+
+    enum CodingKeys: String, CodingKey {
+        case id, exerciseId, name, sets, reps, weightKg, restSecs, notes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        exerciseId = try container.decodeIfPresent(String.self, forKey: .exerciseId)
+        name = try container.decode(String.self, forKey: .name)
+        sets = try container.decode(Int.self, forKey: .sets)
+        reps = try container.decode(String.self, forKey: .reps)
+        weightKg = try container.decodeIfPresent(Double.self, forKey: .weightKg)
+        restSecs = try container.decodeIfPresent(Int.self, forKey: .restSecs) ?? 90
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }
 }
 
