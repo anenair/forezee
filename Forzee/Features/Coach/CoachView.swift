@@ -27,6 +27,9 @@ struct CoachView: View {
     @State private var errorMessage: String?
     @State private var isVoiceModeOn = false
     @State private var isNearBottom = true
+    @State private var isBuildingWorkout = false
+    @State private var workoutBuildError: String?
+    @State private var workoutBuiltConfirmation: String?
 
     private static let bottomAnchorId = "bottom"
 
@@ -57,6 +60,16 @@ struct CoachView: View {
                                     Text(errorMessage)
                                         .font(.fzBody(13))
                                         .foregroundStyle(Color.fzPink)
+                                }
+
+                                if !kaiEngine.isResponding, messages.contains(where: { $0.role == .assistant }) {
+                                    BuildWorkoutRow(
+                                        isBuilding: isBuildingWorkout,
+                                        confirmation: workoutBuiltConfirmation,
+                                        error: workoutBuildError,
+                                        onBuild: { Task { await buildWorkoutFromChat() } },
+                                        onOpenWorkoutTab: { appState.activeTab = .workout }
+                                    )
                                 }
 
                                 Color.clear.frame(height: 1).id(Self.bottomAnchorId)
@@ -123,6 +136,29 @@ struct CoachView: View {
     private func loadChatHistory() async {
         guard let userId = appState.userId else { return }
         messages = await kaiEngine.loadRecentHistory(userId: userId)
+    }
+
+    // MARK: - Build Workout
+
+    /// Extracts whatever workout the conversation has settled on so far and
+    /// hands it to WorkoutTabView via AppState — the exercises as actually
+    /// negotiated in chat (added/removed/adjusted), not a generic re-roll.
+    private func buildWorkoutFromChat() async {
+        guard let userId = appState.userId else { return }
+        isBuildingWorkout = true
+        workoutBuildError = nil
+        defer { isBuildingWorkout = false }
+
+        do {
+            guard let workout = try await kaiEngine.extractWorkoutFromChat(userId: userId, history: messages) else {
+                workoutBuildError = "Couldn't find a clear plan yet — ask Kai to lay out the exercises first."
+                return
+            }
+            appState.activeWorkout = workout
+            workoutBuiltConfirmation = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
+        } catch {
+            workoutBuildError = error.localizedDescription
+        }
     }
 
     // MARK: - Scrolling
@@ -302,6 +338,8 @@ struct CoachView: View {
 
         draftMessage = ""
         errorMessage = nil
+        workoutBuiltConfirmation = nil
+        workoutBuildError = nil
         let userMessage = KaiMessage(role: .user, content: text)
         messages.append(userMessage)
         streamingReply = ""
@@ -329,6 +367,59 @@ struct CoachView: View {
                 errorMessage = error.localizedDescription
                 streamingReply = ""
                 if speakReply { listenForWakePhrase() }
+            }
+        }
+    }
+}
+
+// MARK: - BuildWorkoutRow
+
+/// The "Build Workout" affordance shown under the conversation — lets the
+/// user turn whatever's been negotiated in chat (exercises added/removed,
+/// duration changed) into a real workout on demand, rather than losing that
+/// context to a generic re-roll from the Workout tab's own Generate button.
+private struct BuildWorkoutRow: View {
+    let isBuilding: Bool
+    let confirmation: String?
+    let error: String?
+    let onBuild: () -> Void
+    let onOpenWorkoutTab: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let confirmation {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.fzGreen)
+                    Text(confirmation)
+                        .font(.fzBody(13))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                ForzeeTextButton(title: "Open Workout Tab", action: onOpenWorkoutTab)
+            } else {
+                Button(action: onBuild) {
+                    HStack(spacing: 8) {
+                        if isBuilding {
+                            ProgressView().tint(Color.fzPrimary).scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "dumbbell.fill")
+                        }
+                        Text(isBuilding ? "Building..." : "Build Workout From This Chat")
+                            .font(.fzBody(14, weight: .medium))
+                    }
+                    .foregroundStyle(Color.fzPrimary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.fzPrimaryDim)
+                    .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.pill))
+                }
+                .disabled(isBuilding)
+
+                if let error {
+                    Text(error)
+                        .font(.fzBody(13))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
             }
         }
     }

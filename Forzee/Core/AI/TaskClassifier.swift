@@ -44,6 +44,7 @@ final class TaskClassifier {
         case .dailyBriefing:        return .haiku
         case .gymCompanionComment:  return .haiku  // Live in-workout remarks — speed + cost
         case .workoutVoiceCommand:  return .haiku  // Mid-set intent classification — speed + cost
+        case .workoutExtraction:    return .haiku  // Structured extraction from existing chat — speed + cost
         }
     }
 
@@ -89,4 +90,5 @@ enum KaiTaskType: String, Codable {
     case dailyBriefing       = "daily_briefing"
     case gymCompanionComment = "gym_companion_comment"
     case workoutVoiceCommand = "workout_voice_command"
+    case workoutExtraction   = "workout_extraction"
 }

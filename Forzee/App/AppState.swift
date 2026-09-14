@@ -55,6 +55,15 @@ final class AppState: ObservableObject {
     /// The currently active root tab.
     @Published var activeTab: AppTab = .coach
 
+    // MARK: - Active Workout
+
+    /// The workout that's ready to do — set either by WorkoutTabView's own
+    /// Generate button or by the Coach chat's "Build Workout" skill, so
+    /// either path lands the user on the same workout in the Workout tab.
+    /// In-memory only (matches WorkoutTabView's existing behavior: nothing
+    /// here persists until the session is actually completed and saved).
+    @Published var activeWorkout: GeneratedWorkout? = nil
+
     // MARK: - Init
 
     init() {
@@ -118,6 +127,7 @@ final class AppState: ObservableObject {
         onboardingComplete = false
         subscriptionTier = .free
         activeTab = .coach
+        activeWorkout = nil
     }
 }
 
