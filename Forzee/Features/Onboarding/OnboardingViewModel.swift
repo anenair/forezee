@@ -31,6 +31,7 @@ final class OnboardingViewModel: ObservableObject {
 
     @Published var selectedDays: Set<Weekday> = [.monday, .wednesday, .friday]
     @Published var preferredTime: TimeOfDay = .morning
+    @Published var sessionLengthMinutes: Int = 45
 
     // MARK: - Step 5: Coach Mode
 
@@ -69,6 +70,7 @@ final class OnboardingViewModel: ObservableObject {
             "equipment":              selectedEquipment.map(\.rawValue),
             "preferred_days":         selectedDays.map(\.rawValue),
             "coach_mode":             coachMode.rawValue,
+            "preferred_duration_mins": sessionLengthMinutes,
             "onboarding_complete":    true
         ]
 

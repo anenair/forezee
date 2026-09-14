@@ -81,19 +81,22 @@ struct OnboardingScheduleView: View {
                         }
 
                         // ── Session Length ────────────────────────
-                        VStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .center, spacing: 12) {
                             Text("SESSION LENGTH")
                                 .font(.fzBody(11, weight: .semibold))
                                 .foregroundStyle(Color.fzTextSecondary)
                                 .tracking(1)
 
-                            Text("About 45 minutes")
+                            Text("About \(viewModel.sessionLengthMinutes) minutes")
                                 .font(.fzHeading(24, weight: .bold))
                                 .foregroundStyle(Color.fzText)
 
-                            Text("Adjusted based on your progress")
+                            SessionLengthSegmentedControl(selected: $viewModel.sessionLengthMinutes)
+
+                            Text("Kai keeps workouts to this length — adjust anytime in Settings")
                                 .font(.fzBody(13))
                                 .foregroundStyle(Color.fzTextSecondary)
+                                .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(24)
@@ -186,6 +189,44 @@ private struct TimeSegmentedControl: View {
         .padding(4)
         .frame(height: 44)
         .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.button))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.button)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - SessionLengthSegmentedControl
+
+private struct SessionLengthSegmentedControl: View {
+    @Binding var selected: Int
+
+    private static let presets = [20, 30, 45, 60]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Self.presets, id: \.self) { minutes in
+                Button(action: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.easeInOut(duration: 0.2)) { selected = minutes }
+                }) {
+                    Text("\(minutes)")
+                        .font(.fzBody(13, weight: .medium))
+                        .foregroundStyle(selected == minutes ? Color(hex: "0A0A0F") : Color.fzTextSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(maxHeight: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: ForzeeRadius.chip)
+                                .fill(selected == minutes ? Color.fzPrimary : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .frame(height: 44)
+        .background(Color.fzBg)
         .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.button))
         .overlay(
             RoundedRectangle(cornerRadius: ForzeeRadius.button)
