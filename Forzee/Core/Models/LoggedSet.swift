@@ -18,6 +18,7 @@ struct LoggedSet: Identifiable, Equatable {
     var weightValue: Double?
     var weightUnit: WeightUnit?
     var reps: Int?
+    var restSecs: Int?
     let loggedAt: Date
 
     init(
@@ -25,7 +26,8 @@ struct LoggedSet: Identifiable, Equatable {
         setNumber: Int,
         weightValue: Double? = nil,
         weightUnit: WeightUnit? = nil,
-        reps: Int? = nil
+        reps: Int? = nil,
+        restSecs: Int? = nil
     ) {
         self.id = UUID()
         self.exerciseId = exerciseId
@@ -33,6 +35,7 @@ struct LoggedSet: Identifiable, Equatable {
         self.weightValue = weightValue
         self.weightUnit = weightUnit
         self.reps = reps
+        self.restSecs = restSecs
         self.loggedAt = .now
     }
 }
