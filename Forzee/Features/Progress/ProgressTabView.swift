@@ -32,6 +32,9 @@ struct ProgressTabView: View {
     @State private var askAnswer: String?
     @State private var isAsking = false
 
+    @State private var reportSessions: [SessionHistoryEntry] = []
+    @State private var reportPeriod: ReportPeriod = .month
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -51,6 +54,7 @@ struct ProgressTabView: View {
                             isAsking: isAsking,
                             onAsk: { Task { await askKaiAboutInsights() } }
                         )
+                        ReportsSection(sessions: reportSessions, period: $reportPeriod)
                         nutritionCard
                         ForzeeButton(title: "Log a Meal") { showLogSheet = true }
                         workoutHistorySection
@@ -62,6 +66,7 @@ struct ProgressTabView: View {
             .task {
                 await loadSummary()
                 await loadSessions()
+                await loadReportSessions()
             }
             .sheet(isPresented: $showLogSheet) {
                 LogMealSheet(userId: appState.userId) {
@@ -92,11 +97,25 @@ struct ProgressTabView: View {
             } else {
                 VStack(spacing: ForzeeSpacing.smallGap) {
                     ForEach(sessions.prefix(10)) { session in
-                        SessionHistoryRow(session: session)
+                        SessionHistoryRow(session: session, recentUsageCount: recentUsageCounts[session.workoutId ?? ""] ?? 1, userId: appState.userId)
                     }
                 }
             }
         }
+    }
+
+    /// How many times each workout_id shows up in the currently-fetched
+    /// window — an approximation ("recently"), not the true all-time count,
+    /// since it only sees what fetchSessionHistory's limit pulled in. The
+    /// true count lives in WorkoutDetailView, which fetches that one
+    /// workout's full history with no limit.
+    private var recentUsageCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for session in sessions {
+            guard let workoutId = session.workoutId else { continue }
+            counts[workoutId, default: 0] += 1
+        }
+        return counts
     }
 
     /// Fetches a wider window than the "Recent Workouts" feed below needs
@@ -116,6 +135,17 @@ struct ProgressTabView: View {
         isLoadingInsight = true
         defer { isLoadingInsight = false }
         weeklyInsight = try? await KaiEngine.shared.generateWeeklyInsight(userId: userId)
+    }
+
+    /// Fetches from the start of the current year — the widest range either
+    /// Month or Year in ReportsSection needs — once, rather than re-fetching
+    /// when the user flips the segmented control.
+    private func loadReportSessions() async {
+        guard let userId = appState.userId else { return }
+        reportSessions = (try? await ForzeeDataService.shared.fetchSessionHistory(
+            userId: userId,
+            since: InsightsEngine.startOfYear()
+        )) ?? []
     }
 
     private func askKaiAboutInsights() async {
@@ -189,16 +219,44 @@ private struct StatColumn: View {
 
 /// One row in the workout history feed: date, exercise count, total volume,
 /// duration — all read straight off the session's own `sets_log`, no extra
-/// query per row.
+/// query per row. Tapping it opens WorkoutDetailView for the exact
+/// times-used count and repeat history; recentUsageCount is just a same-
+/// window approximation shown inline.
 private struct SessionHistoryRow: View {
     let session: SessionHistoryEntry
+    let recentUsageCount: Int
+    let userId: String?
 
     var body: some View {
+        Group {
+            if let workoutId = session.workoutId {
+                NavigationLink(destination: WorkoutDetailView(workoutId: workoutId, userId: userId)) {
+                    content
+                }
+                .buttonStyle(.plain)
+            } else {
+                content
+            }
+        }
+    }
+
+    private var content: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.workout?.name ?? "Workout")
-                    .font(.fzBody(14, weight: .semibold))
-                    .foregroundStyle(Color.fzText)
+                HStack(spacing: 6) {
+                    Text(session.workout?.name ?? "Workout")
+                        .font(.fzBody(14, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                    if recentUsageCount > 1 {
+                        Text("Used \(recentUsageCount)× recently")
+                            .font(.fzMono(10, weight: .semibold))
+                            .foregroundStyle(Color.fzPrimary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.fzPrimaryDim)
+                            .clipShape(Capsule())
+                    }
+                }
                 Text(session.startedAt.formatted(date: .abbreviated, time: .omitted))
                     .font(.fzBody(12))
                     .foregroundStyle(Color.fzTextSecondary)

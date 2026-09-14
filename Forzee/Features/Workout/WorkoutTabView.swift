@@ -546,6 +546,7 @@ struct WorkoutTabView: View {
             do {
                 workout = try await KaiEngine.shared.generateWorkout(userId: userId)
                 appState.activeWorkout = workout
+                appState.isRepeatWorkout = false
                 completedExerciseIds = []
                 loggedSets = []
                 companionComment = nil
@@ -572,13 +573,15 @@ struct WorkoutTabView: View {
             completedExerciseIds: completedExerciseIds,
             loggedSets: loggedSets,
             feedback: feedback,
-            userId: userId
+            userId: userId,
+            isRepeat: appState.isRepeatWorkout
         )
 
         isSavingSession = false
         showFeedbackSheet = false
         didSaveSession = true
         appState.activeWorkout = nil  // completed — no longer "active"
+        appState.isRepeatWorkout = false
 
         do {
             report = try await KaiEngine.shared.generateWorkoutReport(
@@ -616,6 +619,7 @@ struct WorkoutTabView: View {
     private func reset() {
         workout = nil
         appState.activeWorkout = nil
+        appState.isRepeatWorkout = false
         completedExerciseIds = []
         loggedSets = []
         companionComment = nil

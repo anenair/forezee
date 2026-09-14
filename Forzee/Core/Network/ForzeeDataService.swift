@@ -278,24 +278,37 @@ final class ForzeeDataService {
     /// + context snapshot at generation time) and `sessions` (the completion
     /// record — one atomic local save, not a later update, since there's no
     /// reliable server-assigned id to update onto until this has synced).
+    ///
+    /// - Parameter isRepeat: true when the user chose "Repeat This Workout"
+    ///   on a past session rather than generating a fresh plan. `workout.id`
+    ///   is then an EXISTING row's id, so the `workouts` insert is skipped
+    ///   entirely — inserting it again would collide on that primary key.
+    ///   Only the new `sessions` row is written, pointing at the same
+    ///   workout_id. That's the whole mechanism behind "times used": it's
+    ///   just a COUNT of sessions sharing one workout_id, not a separate
+    ///   counter to keep in sync.
     func saveCompletedWorkout(
         _ workout: GeneratedWorkout,
         completedExerciseIds: Set<UUID>,
         loggedSets: [LoggedSet],
         feedback: SessionFeedback,
-        userId: String
+        userId: String,
+        isRepeat: Bool = false
     ) async throws {
-        let workoutRecord = WorkoutInsertRecord(
-            id: workout.id.uuidString,
-            userId: userId,
-            name: workout.name,
-            workoutType: workout.workoutType,
-            estimatedDurationMins: workout.estimatedDurationMins,
-            contextSnapshot: workout.contextSnapshot,
-            status: "completed",
-            exercises: workout.exercises
-        )
-        await SyncManager.shared.enqueue(table: "workouts", record: workoutRecord)
+        if !isRepeat {
+            let workoutRecord = WorkoutInsertRecord(
+                id: workout.id.uuidString,
+                userId: userId,
+                name: workout.name,
+                workoutType: workout.workoutType,
+                estimatedDurationMins: workout.estimatedDurationMins,
+                contextSnapshot: workout.contextSnapshot,
+                status: "completed",
+                exercises: workout.exercises,
+                generatedAt: workout.generatedAt
+            )
+            await SyncManager.shared.enqueue(table: "workouts", record: workoutRecord)
+        }
 
         let setRecords: [LoggedSetRecord] = workout.exercises
             .filter { completedExerciseIds.contains($0.id) }
@@ -355,10 +368,48 @@ final class ForzeeDataService {
     func fetchSessionHistory(userId: String, limit: Int = 30) async throws -> [SessionHistoryEntry] {
         let response = try await client
             .from("sessions")
-            .select("*, workouts(name, workout_type, exercises)")
+            .select("*, workouts(name, workout_type, estimated_duration_mins, exercises, generated_at)")
             .eq("user_id", value: userId)
             .order("started_at", ascending: false)
             .limit(limit)
+            .execute()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([SessionHistoryEntry].self, from: response.data)
+    }
+
+    /// Same as above but filtered to sessions on/after `since` — powers the
+    /// Progress tab's Month/Year report, which needs a wider window than
+    /// the general history feed's default limit covers (a year of sessions
+    /// for an active user easily exceeds 30).
+    func fetchSessionHistory(userId: String, since: Date, limit: Int = 500) async throws -> [SessionHistoryEntry] {
+        let formatter = ISO8601DateFormatter()
+        let response = try await client
+            .from("sessions")
+            .select("*, workouts(name, workout_type, estimated_duration_mins, exercises, generated_at)")
+            .eq("user_id", value: userId)
+            .gte("started_at", value: formatter.string(from: since))
+            .order("started_at", ascending: false)
+            .limit(limit)
+            .execute()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([SessionHistoryEntry].self, from: response.data)
+    }
+
+    /// Every session for one specific workout, most recent first — powers
+    /// WorkoutDetailView's full repeat history. Unlike fetchSessionHistory's
+    /// general limit, this has no cap: a frequently-repeated workout should
+    /// show its whole history, not just whatever fits in the general window.
+    func fetchSessionsForWorkout(workoutId: String, userId: String) async throws -> [SessionHistoryEntry] {
+        let response = try await client
+            .from("sessions")
+            .select("*, workouts(name, workout_type, estimated_duration_mins, exercises, generated_at)")
+            .eq("user_id", value: userId)
+            .eq("workout_id", value: workoutId)
+            .order("started_at", ascending: false)
             .execute()
 
         let decoder = JSONDecoder()
@@ -386,6 +437,7 @@ final class ForzeeDataService {
         let contextSnapshot: UserContextSnapshot?
         let status: String
         let exercises: [WorkoutExercise]
+        let generatedAt: Date
     }
 
     private struct SessionInsertRecord: Encodable {
@@ -488,16 +540,23 @@ struct SessionSetEntry: Codable {
 struct SessionWorkoutInfo: Codable {
     let name: String
     let workoutType: String
+    let estimatedDurationMins: Int?
     /// The prescribed exercises, muscle-group tags included — what
     /// InsightsEngine cross-references against a session's own sets_log
     /// (which only carries exercise_name, not muscle group) to attribute
-    /// logged sets to a muscle group.
+    /// logged sets to a muscle group. Also what WorkoutDetailView's
+    /// "Repeat This Workout" reconstructs a GeneratedWorkout from.
     let exercises: [WorkoutExercise]?
+    /// When Kai actually generated this plan — nil only for rows saved
+    /// before this column existed. See WorkoutDetailView.
+    let generatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case name
         case workoutType = "workout_type"
+        case estimatedDurationMins = "estimated_duration_mins"
         case exercises
+        case generatedAt = "generated_at"
     }
 }
 

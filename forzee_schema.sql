@@ -177,8 +177,16 @@ create table public.workouts (
   status text default 'scheduled',
 
   -- Exercises in this workout (ordered)
-  exercises jsonb default '[]'
+  exercises jsonb default '[]',
   -- Structure: [{ exercise_id, sets, reps, weight_kg, rest_secs, notes }]
+
+  -- Exactly when Kai produced this plan — distinct from created_at (when
+  -- this row was first saved), which can trail generation by however long
+  -- the user sat on the workout before starting. "Times used" for a given
+  -- workout is a COUNT of sessions.workout_id, not a column here — see
+  -- ForzeeDataService.saveCompletedWorkout's isRepeat parameter, which
+  -- skips inserting a new workouts row entirely when repeating one.
+  generated_at timestamp with time zone default now()
 );
 
 -- ============================================================
