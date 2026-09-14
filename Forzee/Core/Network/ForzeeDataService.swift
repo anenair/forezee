@@ -56,7 +56,13 @@ final class ForzeeDataService {
             return
         }
 
-        self.client = Supabase.SupabaseClient(supabaseURL: supabaseURL, supabaseKey: key)
+        self.client = Supabase.SupabaseClient(
+            supabaseURL: supabaseURL,
+            supabaseKey: key,
+            options: SupabaseClientOptions(
+                auth: SupabaseClientOptions.AuthOptions(emitLocalSessionAsInitialSession: true)
+            )
+        )
     }
 
     // MARK: - Auth
@@ -66,6 +72,13 @@ final class ForzeeDataService {
     func restoreSession(completion: @escaping (String?) async -> Void) async {
         do {
             let session = try await client.auth.session
+            // With emitLocalSessionAsInitialSession opted in, the SDK now hands back
+            // whatever session is on disk even if it's expired — this used to be
+            // filtered out for us, so the check moves here.
+            guard !session.isExpired else {
+                await completion(nil)
+                return
+            }
             await completion(session.user.id.uuidString)
         } catch {
             await completion(nil)
