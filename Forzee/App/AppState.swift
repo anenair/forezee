@@ -64,6 +64,13 @@ final class AppState: ObservableObject {
     /// here persists until the session is actually completed and saved).
     @Published var activeWorkout: GeneratedWorkout? = nil
 
+    /// True when activeWorkout came from "Repeat This Workout" on a past
+    /// session rather than a fresh generation — tells WorkoutTabView's save
+    /// to reuse the existing workout row (see
+    /// ForzeeDataService.saveCompletedWorkout's isRepeat parameter) instead
+    /// of inserting a new one under the same id.
+    @Published var isRepeatWorkout: Bool = false
+
     // MARK: - Init
 
     init() {
@@ -128,6 +135,7 @@ final class AppState: ObservableObject {
         subscriptionTier = .free
         activeTab = .coach
         activeWorkout = nil
+        isRepeatWorkout = false
     }
 }
 

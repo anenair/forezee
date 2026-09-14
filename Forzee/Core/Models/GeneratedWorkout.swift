@@ -29,6 +29,13 @@ struct GeneratedWorkout: Identifiable, Codable {
     // Context at time of generation (stored for future AI reference)
     var contextSnapshot: UserContextSnapshot?
 
+    /// Exactly when Kai produced this plan — distinct from the `workouts`
+    /// row's own `created_at` (when it was first saved, which can trail
+    /// generation by however long the user sat on it before starting). Never
+    /// decoded from Claude's own JSON — always stamped fresh in Swift at
+    /// construction time, same reasoning as `id` below.
+    let generatedAt: Date
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -36,7 +43,8 @@ struct GeneratedWorkout: Identifiable, Codable {
         estimatedDurationMins: Int,
         coachingNote: String? = nil,
         exercises: [WorkoutExercise],
-        contextSnapshot: UserContextSnapshot? = nil
+        contextSnapshot: UserContextSnapshot? = nil,
+        generatedAt: Date = .now
     ) {
         self.id = id
         self.name = name
@@ -45,6 +53,7 @@ struct GeneratedWorkout: Identifiable, Codable {
         self.coachingNote = coachingNote
         self.exercises = exercises
         self.contextSnapshot = contextSnapshot
+        self.generatedAt = generatedAt
     }
 
     // MARK: - Decodable
@@ -53,10 +62,12 @@ struct GeneratedWorkout: Identifiable, Codable {
     // includes an "id" field — it's not something the model should invent —
     // so the auto-synthesized Decodable, which would require it, always
     // failed to decode a real generation. Every other field decodes exactly
-    // as auto-synthesis would; only `id` gets a fresh UUID when absent.
+    // as auto-synthesis would; only `id` gets a fresh UUID when absent, and
+    // generatedAt is stamped fresh rather than decoded at all — Claude has
+    // no reliable notion of "now" to put in its own JSON.
 
     enum CodingKeys: String, CodingKey {
-        case id, name, workoutType, estimatedDurationMins, coachingNote, exercises, contextSnapshot
+        case id, name, workoutType, estimatedDurationMins, coachingNote, exercises, contextSnapshot, generatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -68,6 +79,7 @@ struct GeneratedWorkout: Identifiable, Codable {
         coachingNote = try container.decodeIfPresent(String.self, forKey: .coachingNote)
         exercises = try container.decode([WorkoutExercise].self, forKey: .exercises)
         contextSnapshot = try container.decodeIfPresent(UserContextSnapshot.self, forKey: .contextSnapshot)
+        generatedAt = .now
     }
 }
 

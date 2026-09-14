@@ -88,6 +88,70 @@ enum InsightsEngine {
         return min(100, Int((points / 4.0) * 100))
     }
 
+    // MARK: - Period Reports (Monthly / Annual)
+
+    /// Summary stats for everything on/after `since` — powers the Progress
+    /// tab's Month/Year report toggle. Callers pass a wide-enough session
+    /// fetch (see ForzeeDataService.fetchSessionHistory's since: parameter)
+    /// for `since` to actually be meaningful; this itself does the date
+    /// filtering, so the same fetched array works for both Month and Year.
+    struct PeriodReport {
+        let totalSessions: Int
+        let totalVolumeKg: Double
+        let mostTrainedMuscleGroup: MuscleGroup?
+        let mostRepeatedWorkoutId: String?
+        let mostRepeatedWorkoutName: String?
+        let mostRepeatedWorkoutCount: Int
+        let momentumScore: Int
+    }
+
+    static func periodReport(
+        sessions: [SessionHistoryEntry],
+        since: Date,
+        asOf now: Date = .now
+    ) -> PeriodReport {
+        let inRange = sessions.filter { $0.startedAt >= since && $0.startedAt <= now }
+
+        var groupCounts: [MuscleGroup: Int] = [:]
+        var workoutCounts: [String: Int] = [:]
+        var workoutNames: [String: String] = [:]
+
+        for session in inRange {
+            let lookup = muscleGroupByExerciseName(session)
+            for set in session.setsLog {
+                guard let name = set.exerciseName, let group = lookup[name] else { continue }
+                groupCounts[group, default: 0] += 1
+            }
+            if let workoutId = session.workoutId {
+                workoutCounts[workoutId, default: 0] += 1
+                if let name = session.workout?.name {
+                    workoutNames[workoutId] = name
+                }
+            }
+        }
+
+        let topGroup = groupCounts.max { $0.value < $1.value }?.key
+        let topWorkout = workoutCounts.max { $0.value < $1.value }
+
+        return PeriodReport(
+            totalSessions: inRange.count,
+            totalVolumeKg: inRange.reduce(0) { $0 + $1.totalVolumeKg },
+            mostTrainedMuscleGroup: topGroup,
+            mostRepeatedWorkoutId: topWorkout?.key,
+            mostRepeatedWorkoutName: topWorkout.flatMap { workoutNames[$0.key] },
+            mostRepeatedWorkoutCount: topWorkout?.value ?? 0,
+            momentumScore: momentumScore(sessions: inRange, asOf: now)
+        )
+    }
+
+    static func startOfMonth(_ date: Date = .now) -> Date {
+        Calendar.current.dateInterval(of: .month, for: date)?.start ?? date
+    }
+
+    static func startOfYear(_ date: Date = .now) -> Date {
+        Calendar.current.dateInterval(of: .year, for: date)?.start ?? date
+    }
+
     // MARK: - Private
 
     /// A session's sets_log only carries exercise_name (see LoggedSetRecord
