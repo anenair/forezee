@@ -34,9 +34,7 @@ final class TaskClassifier {
         case .chatMessage:          return .sonnet  // Coaching chat — conversational depth
         case .workoutGeneration:    return .sonnet
         case .workoutReport:        return .sonnet  // Post-workout report — quality + format reliability
-        case .recoveryAdvice:       return .sonnet
         case .periodization:        return .sonnet
-        case .insightGeneration:    return .sonnet
         case .logging:              return .haiku
         case .confirmation:         return .haiku
         case .simpleQA:             return .haiku
@@ -76,9 +74,10 @@ enum KaiTaskType: String, Codable {
     case chatMessage       = "chat_message"
     case workoutGeneration = "workout_generation"
     case workoutReport     = "workout_report"
-    case recoveryAdvice    = "recovery_advice"
+    // periodization (plan_deload_week) is anticipated but not yet built as
+    // either a KaiEngine method or a skill — kept here so the model-routing
+    // table already has an answer for it whenever it lands.
     case periodization     = "periodization"
-    case insightGeneration = "insight_generation"
 
     // Haiku tasks
     case logging             = "logging"
@@ -88,9 +87,11 @@ enum KaiTaskType: String, Codable {
     case dailyBriefing       = "daily_briefing"
     case gymCompanionComment = "gym_companion_comment"
 
-    // workout_voice_command and workout_extraction used to be cases here —
-    // both now run through the generic skills framework (KaiEngine.run(skill:)
-    // / discoverAndRunSkill) and are tracked under their bundled skill's own
-    // name string instead (see Resources/Skills/, UsageGate.recordUsage(taskType: String, ...)).
+    // workout_voice_command, workout_extraction, recovery_advice, and
+    // insight_generation used to be cases here — all four now run through
+    // the generic skills framework (KaiEngine.run(skill:) / discoverAndRunSkill:
+    // workout_voice_command, extract_workout, recovery_check, explain_insight)
+    // and are tracked under their bundled skill's own name string instead
+    // (see Resources/Skills/, UsageGate.recordUsage(taskType: String, ...)).
     // A new skill needs nothing added to this enum to be tracked.
 }

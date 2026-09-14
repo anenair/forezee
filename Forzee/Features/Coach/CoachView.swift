@@ -363,7 +363,7 @@ struct CoachView: View {
 
         Task {
             do {
-                try await kaiEngine.chat(
+                try await kaiEngine.chatWithSkills(
                     message: text,
                     userId: userId,
                     history: messages,

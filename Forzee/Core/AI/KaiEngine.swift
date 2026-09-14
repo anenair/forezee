@@ -53,6 +53,10 @@ final class KaiEngine: ObservableObject {
     // MARK: - Public Interface
 
     /// Send a coaching message from the user and receive a streaming response.
+    /// No skill routing — always a normal streamed reply. Used by callers
+    /// that want a plain answer regardless of what's bundled (WorkoutTabView's
+    /// mid-workout voice escalation, where a plan change mid-set would be a
+    /// strange thing to trigger by accident).
     ///
     /// - Parameters:
     ///   - message: The raw text from the user.
@@ -67,30 +71,92 @@ final class KaiEngine: ObservableObject {
         onToken: @escaping (String) -> Void,
         onComplete: @escaping (KaiMessage) -> Void
     ) async throws {
-        // 1. Enforce usage limits for free-tier users
         try await usageGate.checkLimit(userId: userId, taskType: .chatMessage)
-
-        // 2. Build context snapshot
         let context = await contextBuilder.buildSnapshot(userId: userId)
 
-        // 3. Classify task → choose model
-        let model = taskClassifier.classify(message: message, context: context)
+        isResponding = true
+        defer { isResponding = false }
 
-        // 4. Assemble messages array (system + history + new message)
-        let messages = assembleMessages(
-            userMessage: message,
-            history: history,
-            context: context
+        try await performChatCompletion(
+            message: message, userId: userId, history: history, context: context,
+            onToken: onToken, onComplete: onComplete
         )
+    }
+
+    /// The Coach tab's actual entry point — tries model-driven skill
+    /// discovery first (adjust_plan_from_chat, recovery_check) and only
+    /// falls back to a normal streamed reply when neither applies. Both
+    /// candidate skills need nothing beyond what's already in the system
+    /// prompt's context snapshot (the user's current plan, recent sleep/
+    /// HRV/calendar) — no separate data-fetch per skill.
+    ///
+    /// Cost: one extra Haiku round trip before every message that doesn't
+    /// match a skill (the common case), on top of the existing chat call.
+    /// Accepted trade-off for real "Kai discovers what applies" routing on
+    /// the app's primary AI surface, rather than a classifier guessing
+    /// intent before Claude ever sees the message.
+    func chatWithSkills(
+        message: String,
+        userId: String,
+        history: [KaiMessage],
+        onToken: @escaping (String) -> Void,
+        onComplete: @escaping (KaiMessage) -> Void
+    ) async throws {
+        try await usageGate.checkLimit(userId: userId, taskType: .chatMessage)
+        let context = await contextBuilder.buildSnapshot(userId: userId)
+
+        isResponding = true
+        defer { isResponding = false }
+
+        let candidates = ["adjust_plan_from_chat", "recovery_check"].compactMap(SkillLoader.shared.skill(named:))
+
+        if !candidates.isEmpty {
+            let dispatch = try? await discoverAndRunSkill(
+                message: message,
+                userId: userId,
+                history: history,
+                candidateSkills: candidates,
+                systemPrompt: KaiSystemPrompt.build(context: context)
+            )
+
+            if case .matched(let skill, let input) = dispatch {
+                try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
+
+                let replyText = handleChatSkillReply(skill, input: input)
+                if skill.name == "adjust_plan_from_chat" {
+                    try? await applyPlanAdjustment(input, userId: userId)
+                }
+
+                let responseMessage = KaiMessage(role: .assistant, content: replyText)
+                try? await ForzeeDataService.shared.saveMessage(responseMessage, userId: userId)
+                onComplete(responseMessage)
+                return
+            }
+        }
+
+        try await performChatCompletion(
+            message: message, userId: userId, history: history, context: context,
+            onToken: onToken, onComplete: onComplete
+        )
+    }
+
+    /// Shared by chat() and chatWithSkills() once both have decided a
+    /// normal streamed reply (not a matched skill) is the right response.
+    private func performChatCompletion(
+        message: String,
+        userId: String,
+        history: [KaiMessage],
+        context: UserContextSnapshot,
+        onToken: @escaping (String) -> Void,
+        onComplete: @escaping (KaiMessage) -> Void
+    ) async throws {
+        let model = taskClassifier.classify(message: message, context: context)
+        let messages = assembleMessages(userMessage: message, history: history, context: context)
 
         // Persist the user's message now, not after the reply — best-effort,
         // matches the rest of the app's policy of treating chat history as
         // lower-stakes (see SyncManager). Never blocks or fails the chat turn.
         try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
-
-        // 5. Stream response
-        isResponding = true
-        defer { isResponding = false }
 
         let fullResponse = try await apiClient.streamCompletion(
             model: model,
@@ -99,7 +165,6 @@ final class KaiEngine: ObservableObject {
             onToken: onToken
         )
 
-        // 6. Record usage
         await usageGate.recordUsage(
             userId: userId,
             taskType: .chatMessage,
@@ -108,10 +173,66 @@ final class KaiEngine: ObservableObject {
             outputTokens: fullResponse.estimatedTokenCount
         )
 
-        // 7. Return assembled message
         let responseMessage = KaiMessage(role: .assistant, content: fullResponse)
         try? await ForzeeDataService.shared.saveMessage(responseMessage, userId: userId)
         onComplete(responseMessage)
+    }
+
+    // MARK: - Chat Skill Handling
+
+    private func handleChatSkillReply(_ skill: Skill, input: [String: Any]) -> String {
+        switch skill.name {
+        case "adjust_plan_from_chat":
+            return input["confirmation_reply"] as? String ?? "Done."
+        case "recovery_check":
+            return input["reply"] as? String ?? "I couldn't put together a recommendation — try asking again."
+        default:
+            return "Something in Kai's skills got confused — try again."
+        }
+    }
+
+    /// Applies only the fields the model actually included — see
+    /// adjust_plan_from_chat's own instruction to omit anything not being
+    /// changed. Updates both the persisted profile and AppState's in-memory
+    /// copy so My Plan (and every other screen reading appState.userProfile)
+    /// reflects the change immediately, not just on next app launch.
+    private func applyPlanAdjustment(_ input: [String: Any], userId: String) async throws {
+        var updates: [String: Any] = [:]
+        for key in [
+            "training_split", "exercise_variability", "warmup_sets_enabled",
+            "circuits_supersets_enabled", "weight_unit", "start_of_week",
+            "preferred_duration_mins", "coach_mode", "fitness_level",
+        ] {
+            if let value = input[key] {
+                updates[key] = value
+            }
+        }
+        guard !updates.isEmpty else { return }
+
+        try await ForzeeDataService.shared.updateProfile(updates, userId: userId)
+
+        guard let profile = AppState.shared?.userProfile else { return }
+        var updated = profile
+        if let v = updates["training_split"] as? String { updated.trainingSplit = v }
+        if let v = updates["exercise_variability"] as? String { updated.exerciseVariability = v }
+        if let v = updates["warmup_sets_enabled"] as? Bool { updated.warmupSetsEnabled = v }
+        if let v = updates["circuits_supersets_enabled"] as? Bool { updated.circuitsSupersetsEnabled = v }
+        if let v = updates["weight_unit"] as? String { updated.weightUnit = v }
+        if let v = updates["start_of_week"] as? String { updated.startOfWeek = v }
+        if let v = Self.intValue(updates["preferred_duration_mins"]) { updated.preferredDurationMins = v }
+        if let v = updates["coach_mode"] as? String { updated.coachMode = v }
+        if let v = updates["fitness_level"] as? String { updated.fitnessLevel = v }
+        AppState.shared?.userProfile = updated
+    }
+
+    /// JSONSerialization boxes JSON numbers as NSNumber, and a bare `as? Int`
+    /// on that isn't reliable (same reasoning as WorkoutVoiceCommandResult's
+    /// own intValue helper) — this covers Int, Double, and NSNumber alike.
+    private static func intValue(_ any: Any?) -> Int? {
+        if let i = any as? Int { return i }
+        if let d = any as? Double { return Int(d) }
+        if let n = any as? NSNumber { return n.intValue }
+        return nil
     }
 
     /// Restore recent chat history on launch — best-effort, empty on failure.
@@ -318,9 +439,52 @@ final class KaiEngine: ObservableObject {
             throw ClaudeAPIError.malformedResponse
         }
 
-        // A wide lookback (not just the trailing 7 days) — recovery needs
-        // to see further back than the volume window does to say anything
-        // useful about a genuinely stale muscle group.
+        let summaries = await buildInsightSummaries(userId: userId)
+        let input = try await run(
+            skill: skill,
+            placeholders: [
+                "volume_summary": summaries.volume,
+                "recovery_summary": summaries.recovery,
+                "momentum_score": String(summaries.momentum),
+            ],
+            userId: userId
+        )
+
+        return input["insight"] as? String ?? "Kai couldn't put together this week's read — try again in a bit."
+    }
+
+    /// On-demand version of the weekly read — "why did my momentum drop?" —
+    /// answering one specific question against the same InsightsEngine
+    /// numbers instead of a scheduled summary. Forced via run(skill:), not
+    /// chat discovery: the data it needs (a session-history fetch +
+    /// aggregation) is deliberately kept out of every chat message's cheap
+    /// context snapshot, so this only runs when the user is already looking
+    /// at the Insights tab and asks something.
+    func explainInsight(question: String, userId: String) async throws -> String {
+        guard let skill = SkillLoader.shared.skill(named: "explain_insight") else {
+            throw ClaudeAPIError.malformedResponse
+        }
+
+        let summaries = await buildInsightSummaries(userId: userId)
+        let input = try await run(
+            skill: skill,
+            placeholders: [
+                "question": question,
+                "volume_summary": summaries.volume,
+                "recovery_summary": summaries.recovery,
+                "momentum_score": String(summaries.momentum),
+            ],
+            userId: userId
+        )
+
+        return input["reply"] as? String ?? "Kai couldn't answer that — try again in a bit."
+    }
+
+    /// Shared by generateWeeklyInsight and explainInsight — same aggregation,
+    /// same wide (60-session) lookback since Recovery needs to see further
+    /// back than the volume window does to say anything useful about a
+    /// genuinely stale muscle group.
+    private func buildInsightSummaries(userId: String) async -> (volume: String, recovery: String, momentum: Int) {
         let sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 60)) ?? []
 
         let volume = InsightsEngine.weeklySetVolume(sessions: sessions)
@@ -338,17 +502,7 @@ final class KaiEngine: ObservableObject {
             return "\(group.displayName): no recent session data"
         }.joined(separator: "\n")
 
-        let input = try await run(
-            skill: skill,
-            placeholders: [
-                "volume_summary": volumeSummary,
-                "recovery_summary": recoverySummary,
-                "momentum_score": String(momentum),
-            ],
-            userId: userId
-        )
-
-        return input["insight"] as? String ?? "Kai couldn't put together this week's read — try again in a bit."
+        return (volumeSummary, recoverySummary, momentum)
     }
 
     // MARK: - Skills Framework
