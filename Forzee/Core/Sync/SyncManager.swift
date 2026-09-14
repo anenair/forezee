@@ -126,8 +126,7 @@ final class SyncManager: ObservableObject {
 
         for write in writes where write.retryCount <= maxAutoRetries {
             do {
-                let values = try JSONSerialization.jsonObject(with: write.payloadJSON) as? [String: Any] ?? [:]
-                try await ForzeeDataService.shared.rawInsert(table: write.table, values: values)
+                try await ForzeeDataService.shared.rawInsert(table: write.table, payload: write.payloadJSON)
                 modelContext.delete(write)
                 // Save immediately after each success, not batched at the end of the
                 // loop — narrows the crash window between "upload succeeded" and

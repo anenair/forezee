@@ -35,13 +35,10 @@ final class CalendarManager: ObservableObject {
     @discardableResult
     func requestAccess() async -> Bool {
         do {
-            let granted: Bool
-            if #available(iOS 17.0, *) {
-                granted = try await store.requestFullAccessToEvents()
-            } else {
-                granted = try await store.requestAccess(to: .event)
-            }
-            isAuthorized = granted
+            // Deployment target is iOS 18.0, so the granular full/write-only
+            // access API (iOS 17+) is always available — no need to branch
+            // on the deprecated all-or-nothing requestAccess(to:).
+            isAuthorized = try await store.requestFullAccessToEvents()
         } catch {
             #if DEBUG
             print("CalendarManager: authorization failed — \(error.localizedDescription)")
@@ -52,11 +49,7 @@ final class CalendarManager: ObservableObject {
     }
 
     private static func currentAuthorizationGranted() -> Bool {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        if #available(iOS 17.0, *) {
-            return status == .fullAccess
-        }
-        return status == .authorized
+        EKEventStore.authorizationStatus(for: .event) == .fullAccess
     }
 
     // MARK: - Signals

@@ -109,10 +109,19 @@ final class ForzeeDataService {
     }
 
     /// Update profile fields. Pass only the fields you want to change.
+    ///
+    /// Takes `[String: Any]` for caller convenience (plain dictionary
+    /// literals), but the Supabase Swift SDK's `.update()` requires a
+    /// concrete `Encodable` type — `Any` itself doesn't conform. Converted
+    /// internally to `[String: AnyJSON]` (Supabase's own type-erased JSON
+    /// value, which is Encodable) via a JSON round-trip.
     func updateProfile(_ updates: [String: Any], userId: String) async throws {
+        let data = try JSONSerialization.data(withJSONObject: updates)
+        let payload = try JSONDecoder().decode([String: AnyJSON].self, from: data)
+
         try await client
             .from("profiles")
-            .update(updates)
+            .update(payload)
             .eq("id", value: userId)
             .execute()
     }
@@ -135,10 +144,10 @@ final class ForzeeDataService {
 
     /// Save a coach message to the `coach_messages` table.
     func saveMessage(_ message: KaiMessage, userId: String) async throws {
-        let record: [String: Any] = [
-            "user_id": userId,
-            "role": message.role.rawValue,
-            "content": message.content
+        let record: [String: AnyJSON] = [
+            "user_id": .string(userId),
+            "role": .string(message.role.rawValue),
+            "content": .string(message.content)
         ]
         try await client
             .from("coach_messages")
@@ -151,13 +160,12 @@ final class ForzeeDataService {
     /// Persist a life signal (sleep, HRV, steps, stress, calendar, weather) for trend history.
     /// Best-effort — callers should treat failures as non-fatal.
     func insertContextSignal(_ signal: ContextSignal) async throws {
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(signal)
-        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let data = try JSONEncoder().encode(signal)
+        let payload = try JSONDecoder().decode([String: AnyJSON].self, from: data)
 
         try await client
             .from("context_signals")
-            .insert(dict)
+            .insert(payload)
             .execute()
     }
 
@@ -216,13 +224,12 @@ final class ForzeeDataService {
     /// RLS restricts this to the caller's own rows — see forzee_schema.sql.
     func saveDeviceToken(_ token: String, environment: String, userId: String) async throws {
         let record = DeviceTokenRecord(userId: userId, token: token, environment: environment)
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(record)
-        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let data = try JSONEncoder().encode(record)
+        let payload = try JSONDecoder().decode([String: AnyJSON].self, from: data)
 
         try await client
             .from("device_tokens")
-            .upsert(dict, onConflict: "user_id,token")
+            .upsert(payload, onConflict: "user_id,token")
             .execute()
     }
 
@@ -318,7 +325,11 @@ final class ForzeeDataService {
     /// Direct, immediate network insert — used only by SyncManager when
     /// actually uploading a queued write. Never call this straight from a
     /// view or view model; that would defeat the offline-first guarantee.
-    func rawInsert(table: String, values: [String: Any]) async throws {
+    /// Takes the already-encoded JSON payload directly (SyncManager stores
+    /// it as Data) and decodes straight into `[String: AnyJSON]` — the
+    /// Supabase SDK's Encodable requirement, same reasoning as updateProfile.
+    func rawInsert(table: String, payload: Data) async throws {
+        let values = try JSONDecoder().decode([String: AnyJSON].self, from: payload)
         try await client.from(table).insert(values).execute()
     }
 
@@ -362,11 +373,11 @@ final class ForzeeDataService {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(record)
-        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let payload = try JSONDecoder().decode([String: AnyJSON].self, from: data)
 
         try await client
             .from("usage_tracking")
-            .insert(dict)
+            .insert(payload)
             .execute()
     }
 }
