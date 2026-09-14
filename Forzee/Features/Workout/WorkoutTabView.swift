@@ -388,10 +388,16 @@ struct WorkoutTabView: View {
                     ExerciseRow(
                         exercise: exercise,
                         isCompleted: completedExerciseIds.contains(exercise.id),
-                        loggedSets: sets(for: exercise.id)
-                    ) {
-                        toggle(exercise)
-                    }
+                        loggedSets: sets(for: exercise.id),
+                        onToggle: { toggle(exercise) },
+                        onLogSet: { setNumber, weight, unit, reps, restSecs in
+                            logSet(
+                                exercise: exercise, setNumber: setNumber,
+                                weight: weight, unit: unit, reps: reps, restSecs: restSecs
+                            )
+                        },
+                        onRemoveSet: { setNumber in removeSet(exercise: exercise, setNumber: setNumber) }
+                    )
                 }
             }
 
@@ -452,6 +458,45 @@ struct WorkoutTabView: View {
             completedExerciseIds.insert(exercise.id)
             fetchCompanionComment(for: exercise)
         }
+    }
+
+    /// Manual per-set entry from ExerciseRow's expanded editor — the tap
+    /// alternative to voice logging. Upserts by (exercise, setNumber) so
+    /// editing an already-logged set overwrites it rather than duplicating.
+    private func logSet(
+        exercise: WorkoutExercise,
+        setNumber: Int,
+        weight: Double?,
+        unit: WeightUnit,
+        reps: Int?,
+        restSecs: Int?
+    ) {
+        if let index = loggedSets.firstIndex(where: { $0.exerciseId == exercise.id && $0.setNumber == setNumber }) {
+            loggedSets[index].weightValue = weight
+            loggedSets[index].weightUnit = weight == nil ? nil : unit
+            loggedSets[index].reps = reps
+            loggedSets[index].restSecs = restSecs
+        } else {
+            loggedSets.append(LoggedSet(
+                exerciseId: exercise.id,
+                setNumber: setNumber,
+                weightValue: weight,
+                weightUnit: weight == nil ? nil : unit,
+                reps: reps,
+                restSecs: restSecs
+            ))
+        }
+
+        let alreadyCompleted = completedExerciseIds.contains(exercise.id)
+        if !alreadyCompleted, sets(for: exercise.id).count >= exercise.sets {
+            completedExerciseIds.insert(exercise.id)
+            fetchCompanionComment(for: exercise)
+        }
+    }
+
+    private func removeSet(exercise: WorkoutExercise, setNumber: Int) {
+        loggedSets.removeAll { $0.exerciseId == exercise.id && $0.setNumber == setNumber }
+        completedExerciseIds.remove(exercise.id)
     }
 
     private func fetchCompanionComment(for exercise: WorkoutExercise) {
@@ -681,36 +726,64 @@ private struct ExerciseRow: View {
     let isCompleted: Bool
     let loggedSets: [LoggedSet]
     let onToggle: () -> Void
+    let onLogSet: (Int, Double?, WeightUnit, Int?, Int?) -> Void  // setNumber, weight, unit, reps, restSecs
+    let onRemoveSet: (Int) -> Void
+
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: onToggle) {
-                HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Button(action: onToggle) {
                     Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 20))
                         .foregroundStyle(isCompleted ? Color.fzGreen : Color.fzBorder)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(exercise.name)
-                            .font(.fzBody(15, weight: .semibold))
-                            .foregroundStyle(Color.fzText)
-                            .strikethrough(isCompleted)
-                        Text(setsRepsText)
-                            .font(.fzMono(13))
-                            .foregroundStyle(Color.fzTextSecondary)
-                        if let notes = exercise.notes, !notes.isEmpty {
-                            Text(notes)
-                                .font(.fzBody(12))
-                                .foregroundStyle(Color.fzTextSecondary)
-                        }
-                    }
-
-                    Spacer()
                 }
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            if !loggedSets.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(exercise.name)
+                        .font(.fzBody(15, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                        .strikethrough(isCompleted)
+                    Text(setsRepsText)
+                        .font(.fzMono(13))
+                        .foregroundStyle(Color.fzTextSecondary)
+                    if let notes = exercise.notes, !notes.isEmpty {
+                        Text(notes)
+                            .font(.fzBody(12))
+                            .foregroundStyle(Color.fzTextSecondary)
+                    }
+                }
+
+                Spacer()
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() } }) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.fzTextSecondary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isExpanded {
+                VStack(spacing: 6) {
+                    ForEach(1...max(exercise.sets, 1), id: \.self) { setNumber in
+                        SetInputRow(
+                            setNumber: setNumber,
+                            prescribedReps: exercise.reps,
+                            prescribedRestSecs: exercise.restSecs,
+                            logged: loggedSets.first { $0.setNumber == setNumber },
+                            onSave: { weight, unit, reps, rest in
+                                onLogSet(setNumber, weight, unit, reps, rest)
+                            },
+                            onClear: { onRemoveSet(setNumber) }
+                        )
+                    }
+                }
+                .padding(.leading, 32)
+            } else if !loggedSets.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(loggedSets) { set in
                         Text(loggedSetText(set))
@@ -736,6 +809,9 @@ private struct ExerciseRow: View {
         if let reps = set.reps {
             text += " × \(reps)"
         }
+        if let rest = set.restSecs {
+            text += " · rest \(rest)s"
+        }
         return text
     }
 
@@ -746,6 +822,110 @@ private struct ExerciseRow: View {
         }
         text += " · rest \(exercise.restSecs)s"
         return text
+    }
+}
+
+// MARK: - SetInputRow
+
+/// One editable set within an expanded ExerciseRow — weight, reps, and rest,
+/// all overridable regardless of what was prescribed. The tap alternative to
+/// voice logging ("Hi Kai, mark a set complete, 135 lbs, 8 reps").
+private struct SetInputRow: View {
+    let setNumber: Int
+    let prescribedReps: String
+    let prescribedRestSecs: Int
+    let logged: LoggedSet?
+    let onSave: (Double?, WeightUnit, Int?, Int?) -> Void
+    let onClear: () -> Void
+
+    @State private var weightText = ""
+    @State private var repsText = ""
+    @State private var restText = ""
+    @State private var unit: WeightUnit = .lbs
+
+    private var isLogged: Bool { logged != nil }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Set \(setNumber)")
+                .font(.fzMono(11, weight: .medium))
+                .foregroundStyle(Color.fzTextSecondary)
+                .frame(width: 40, alignment: .leading)
+
+            fieldBox(text: $weightText, placeholder: "wt", keyboard: .decimalPad, width: 44)
+
+            Picker("", selection: $unit) {
+                Text("lbs").tag(WeightUnit.lbs)
+                Text("kg").tag(WeightUnit.kg)
+            }
+            .pickerStyle(.menu)
+            .font(.fzBody(11))
+            .tint(Color.fzTextSecondary)
+            .frame(width: 50)
+
+            Text("×")
+                .font(.fzBody(12))
+                .foregroundStyle(Color.fzTextSecondary)
+
+            fieldBox(text: $repsText, placeholder: prescribedReps, keyboard: .numberPad, width: 36)
+
+            Text("rest")
+                .font(.fzBody(11))
+                .foregroundStyle(Color.fzTextSecondary)
+
+            fieldBox(text: $restText, placeholder: "\(prescribedRestSecs)", keyboard: .numberPad, width: 36)
+
+            Text("s")
+                .font(.fzBody(11))
+                .foregroundStyle(Color.fzTextSecondary)
+
+            Spacer(minLength: 4)
+
+            if isLogged {
+                Button(action: onClear) {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button(action: save) {
+                Image(systemName: isLogged ? "checkmark.circle.fill" : "arrow.down.circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(isLogged ? Color.fzGreen : Color.fzPrimary)
+            }
+            .buttonStyle(.plain)
+        }
+        .onAppear(perform: loadFromLogged)
+        .onChange(of: logged) { _, _ in loadFromLogged() }
+    }
+
+    private func fieldBox(text: Binding<String>, placeholder: String, keyboard: UIKeyboardType, width: CGFloat) -> some View {
+        TextField(placeholder, text: text)
+            .keyboardType(keyboard)
+            .multilineTextAlignment(.center)
+            .font(.fzMono(13))
+            .foregroundStyle(Color.fzText)
+            .frame(width: width)
+            .padding(.vertical, 6)
+            .background(Color.fzSurface)
+            .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+    }
+
+    private func loadFromLogged() {
+        weightText = logged?.weightValue.map(formatted) ?? ""
+        repsText = logged?.reps.map(String.init) ?? ""
+        restText = logged?.restSecs.map(String.init) ?? ""
+        unit = logged?.weightUnit ?? .lbs
+    }
+
+    private func save() {
+        onSave(Double(weightText), unit, Int(repsText), Int(restText))
+    }
+
+    private func formatted(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(format: "%.1f", value)
     }
 }
 

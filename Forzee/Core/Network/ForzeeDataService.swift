@@ -315,7 +315,8 @@ final class ForzeeDataService {
                             exerciseName: exercise.name,
                             setNumber: setNumber,
                             weightKg: exercise.weightKg,
-                            reps: nil
+                            reps: nil,
+                            restSecs: exercise.restSecs
                         )
                     }
                 }
@@ -325,7 +326,8 @@ final class ForzeeDataService {
                         exerciseName: exercise.name,
                         setNumber: set.setNumber,
                         weightKg: set.weightValue.map { set.weightUnit == .lbs ? $0 * 0.453592 : $0 },
-                        reps: set.reps
+                        reps: set.reps,
+                        restSecs: set.restSecs ?? exercise.restSecs
                     )
                 }
             }
@@ -386,6 +388,7 @@ final class ForzeeDataService {
         let setNumber: Int
         let weightKg: Double?
         let reps: Int?
+        let restSecs: Int?
     }
 
     // MARK: - Usage Tracking
