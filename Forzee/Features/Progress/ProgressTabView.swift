@@ -138,7 +138,7 @@ private struct LogMealSheet: View {
 
                     Spacer()
 
-                    ForzeeButton(title: "Save", isDisabled: calories.isEmpty, isLoading: isSaving, action: save)
+                    ForzeeButton(title: "Save", action: save, isDisabled: calories.isEmpty, isLoading: isSaving)
                 }
                 .padding(ForzeeSpacing.screenPadding)
             }

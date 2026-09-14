@@ -340,7 +340,7 @@ struct WorkoutTabView: View {
             if !syncManager.isOnline {
                 ConnectivityNotice(message: "No connection — Kai needs one to generate a workout.")
             } else {
-                ForzeeButton(title: "Generate Today's Workout", isLoading: isGenerating, action: generate)
+                ForzeeButton(title: "Generate Today's Workout", action: generate, isLoading: isGenerating)
             }
         }
         .padding(.top, ForzeeSpacing.sectionGap)
@@ -555,14 +555,18 @@ private struct SessionFeedbackSheet: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                ForzeeButton(title: "Save Session", isLoading: isSaving) {
-                    onSave(SessionFeedback(
-                        perceivedEffort: Int(perceivedEffort),
-                        mood: mood,
-                        notes: notes,
-                        rating: rating > 0 ? rating : nil
-                    ))
-                }
+                ForzeeButton(
+                    title: "Save Session",
+                    action: {
+                        onSave(SessionFeedback(
+                            perceivedEffort: Int(perceivedEffort),
+                            mood: mood,
+                            notes: notes,
+                            rating: rating > 0 ? rating : nil
+                        ))
+                    },
+                    isLoading: isSaving
+                )
                 .padding(ForzeeSpacing.screenPadding)
                 .background(Color.fzBg)
             }

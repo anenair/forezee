@@ -90,9 +90,11 @@ struct OnboardingPermissionsView: View {
 
                     // ── CTAs ──────────────────────────────────────
                     VStack(spacing: 12) {
-                        ForzeeButton(title: "Grant All", isLoading: isRequesting) {
-                            Task { await grantAll() }
-                        }
+                        ForzeeButton(
+                            title: "Grant All",
+                            action: { Task { await grantAll() } },
+                            isLoading: isRequesting
+                        )
                         ForzeeTextButton(title: "Set up later", action: onSetUpLater)
                     }
                     .padding(.bottom, ForzeeSpacing.screenPadding)
