@@ -83,6 +83,11 @@ final class KaiEngine: ObservableObject {
             context: context
         )
 
+        // Persist the user's message now, not after the reply — best-effort,
+        // matches the rest of the app's policy of treating chat history as
+        // lower-stakes (see SyncManager). Never blocks or fails the chat turn.
+        try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
+
         // 5. Stream response
         isResponding = true
         defer { isResponding = false }
@@ -105,7 +110,14 @@ final class KaiEngine: ObservableObject {
 
         // 7. Return assembled message
         let responseMessage = KaiMessage(role: .assistant, content: fullResponse)
+        try? await ForzeeDataService.shared.saveMessage(responseMessage, userId: userId)
         onComplete(responseMessage)
+    }
+
+    /// Restore recent chat history on launch — best-effort, empty on failure.
+    func loadRecentHistory(userId: String) async -> [KaiMessage] {
+        let stored = (try? await ForzeeDataService.shared.fetchRecentMessages(userId: userId)) ?? []
+        return stored.map { $0.toKaiMessage() }
     }
 
     /// Generate an adaptive workout for the user.
