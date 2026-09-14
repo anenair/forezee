@@ -769,6 +769,8 @@ private struct ExerciseRow: View {
 
             if isExpanded {
                 VStack(spacing: 6) {
+                    SetColumnHeader()
+
                     ForEach(1...max(exercise.sets, 1), id: \.self) { setNumber in
                         SetInputRow(
                             setNumber: setNumber,
@@ -825,6 +827,25 @@ private struct ExerciseRow: View {
     }
 }
 
+// MARK: - SetColumnHeader
+
+/// Labels the columns above the per-set editor rows — without this, a row of
+/// bare number boxes (weight / reps / rest) gives no clue which is which.
+private struct SetColumnHeader: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Set").frame(width: 40, alignment: .leading)
+            Text("Weight").frame(width: SetInputRow.weightColumnWidth, alignment: .leading)
+            Text("Reps").frame(width: SetInputRow.smallColumnWidth, alignment: .center)
+            Text("Rest").frame(width: SetInputRow.smallColumnWidth, alignment: .center)
+            Spacer(minLength: 44)
+        }
+        .font(.fzBody(10, weight: .semibold))
+        .foregroundStyle(Color.fzTextSecondary.opacity(0.7))
+        .textCase(.uppercase)
+    }
+}
+
 // MARK: - SetInputRow
 
 /// One editable set within an expanded ExerciseRow — weight, reps, and rest,
@@ -845,6 +866,9 @@ private struct SetInputRow: View {
 
     private var isLogged: Bool { logged != nil }
 
+    static let weightColumnWidth: CGFloat = 108
+    static let smallColumnWidth: CGFloat = 36
+
     var body: some View {
         HStack(spacing: 6) {
             Text("Set \(setNumber)")
@@ -852,32 +876,22 @@ private struct SetInputRow: View {
                 .foregroundStyle(Color.fzTextSecondary)
                 .frame(width: 40, alignment: .leading)
 
-            fieldBox(text: $weightText, placeholder: "wt", keyboard: .decimalPad, width: 44)
+            HStack(spacing: 4) {
+                fieldBox(text: $weightText, placeholder: "wt", keyboard: .decimalPad, width: 44)
 
-            Picker("", selection: $unit) {
-                Text("lbs").tag(WeightUnit.lbs)
-                Text("kg").tag(WeightUnit.kg)
+                Picker("", selection: $unit) {
+                    Text("lb").tag(WeightUnit.lbs)
+                    Text("kg").tag(WeightUnit.kg)
+                }
+                .pickerStyle(.menu)
+                .font(.fzBody(11))
+                .tint(Color.fzTextSecondary)
+                .fixedSize()
             }
-            .pickerStyle(.menu)
-            .font(.fzBody(11))
-            .tint(Color.fzTextSecondary)
-            .frame(width: 50)
+            .frame(width: Self.weightColumnWidth, alignment: .leading)
 
-            Text("×")
-                .font(.fzBody(12))
-                .foregroundStyle(Color.fzTextSecondary)
-
-            fieldBox(text: $repsText, placeholder: prescribedReps, keyboard: .numberPad, width: 36)
-
-            Text("rest")
-                .font(.fzBody(11))
-                .foregroundStyle(Color.fzTextSecondary)
-
-            fieldBox(text: $restText, placeholder: "\(prescribedRestSecs)", keyboard: .numberPad, width: 36)
-
-            Text("s")
-                .font(.fzBody(11))
-                .foregroundStyle(Color.fzTextSecondary)
+            fieldBox(text: $repsText, placeholder: prescribedReps, keyboard: .numberPad, width: Self.smallColumnWidth)
+            fieldBox(text: $restText, placeholder: "\(prescribedRestSecs)", keyboard: .numberPad, width: Self.smallColumnWidth)
 
             Spacer(minLength: 4)
 

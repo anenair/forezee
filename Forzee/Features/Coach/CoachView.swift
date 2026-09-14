@@ -95,13 +95,15 @@ struct CoachView: View {
                         .overlay(alignment: .bottomTrailing) {
                             if !isNearBottom {
                                 Button(action: { scrollToBottom(proxy: proxy, animated: true) }) {
-                                    Image(systemName: "chevron.down.circle.fill")
-                                        .font(.system(size: 32))
-                                        .foregroundStyle(Color.fzPrimary)
-                                        .background(Circle().fill(Color.fzBg))
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(Color(hex: "0A0A0F"))
+                                        .frame(width: 36, height: 36)
+                                        .background(Circle().fill(Color.fzPrimary))
+                                        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
                                 }
                                 .padding(.trailing, ForzeeSpacing.screenPadding)
-                                .padding(.bottom, 8)
+                                .padding(.bottom, 12)
                             }
                         }
                         .onChange(of: messages.count) { _, _ in
@@ -312,10 +314,15 @@ struct CoachView: View {
                     // A vertical-axis TextField treats Return as "insert a
                     // newline" — .onSubmit never fires for it. Detect the
                     // newline Return appends, strip it, and send instead.
+                    // Deferred to the next runloop turn: mutating draftMessage
+                    // synchronously from inside its own onChange re-triggers
+                    // onChange within the same frame (SwiftUI warns on this).
                     guard newValue.hasSuffix("\n") else { return }
-                    draftMessage.removeLast()
-                    guard canSend else { return }
-                    sendMessage(draftMessage, speakReply: false)
+                    DispatchQueue.main.async {
+                        draftMessage.removeLast()
+                        guard canSend else { return }
+                        sendMessage(draftMessage, speakReply: false)
+                    }
                 }
 
             Button(action: { sendMessage(draftMessage, speakReply: false) }) {
@@ -485,16 +492,26 @@ private struct MessageBubble: View {
     let message: KaiMessage
     let showAvatar: Bool
 
-    /// Kai's replies are plain text with blank-line paragraph breaks (see
-    /// the system prompt's formatting rule) — rendering each as its own
-    /// block instead of one monolithic Text gives long replies actual
-    /// visual structure instead of a wall of text.
-    private var paragraphs: [String] {
+    private enum Block {
+        case prose(String)
+        case listItem(String)
+    }
+
+    /// Kai's replies are plain text with blank-line paragraph breaks, and a
+    /// "- " prefix on any line that's an exercise in a list rather than
+    /// prose (see the system prompt's formatting rule). Rendering list
+    /// items distinctly from prose — instead of every block looking like an
+    /// identical paragraph — is what actually cuts the clutter on a long
+    /// workout rundown.
+    private var blocks: [Block] {
         let split = message.content
             .components(separatedBy: "\n\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return split.isEmpty ? [message.content] : split
+        let paragraphs = split.isEmpty ? [message.content] : split
+        return paragraphs.map { text in
+            text.hasPrefix("- ") ? .listItem(String(text.dropFirst(2))) : .prose(text)
+        }
     }
 
     var body: some View {
@@ -504,18 +521,33 @@ private struct MessageBubble: View {
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                        Text(paragraph)
-                            .font(.fzBody(15))
-                            .foregroundStyle(message.role == .user ? Color(hex: "0A0A0F") : Color.fzText)
-                            .lineSpacing(4)
-                            .multilineTextAlignment(.leading)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                        switch block {
+                        case .prose(let text):
+                            Text(text)
+                                .font(.fzBody(15))
+                                .foregroundStyle(textColor)
+                                .lineSpacing(4)
+                                .multilineTextAlignment(.leading)
+                        case .listItem(let text):
+                            HStack(alignment: .top, spacing: 8) {
+                                Circle()
+                                    .fill(textColor.opacity(0.7))
+                                    .frame(width: 5, height: 5)
+                                    .padding(.top, 7)
+                                Text(text)
+                                    .font(.fzBody(14))
+                                    .foregroundStyle(textColor)
+                                    .lineSpacing(3)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
-                .frame(maxWidth: 280, alignment: .leading)
+                .frame(maxWidth: 275, alignment: .leading)
                 .background(message.role == .user ? Color.fzPrimary : Color.fzSurface)
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
                 .shadow(color: .black.opacity(message.role == .assistant ? 0.15 : 0), radius: 5, y: 2)
@@ -529,6 +561,10 @@ private struct MessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    private var textColor: Color {
+        message.role == .user ? Color(hex: "0A0A0F") : Color.fzText
     }
 }
 
