@@ -20,6 +20,11 @@ struct InsightsSection: View {
     let onRefreshInsight: () -> Void
     let onUpgrade: () -> Void
 
+    @Binding var askQuestion: String
+    let askAnswer: String?
+    let isAsking: Bool
+    let onAsk: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
             HStack {
@@ -40,6 +45,7 @@ struct InsightsSection: View {
             if isPremium {
                 VStack(spacing: ForzeeSpacing.itemGap) {
                     KaiWeeklyReadCard(insight: weeklyInsight, isLoading: isLoadingInsight, onRefresh: onRefreshInsight)
+                    AskKaiCard(question: $askQuestion, answer: askAnswer, isAsking: isAsking, onAsk: onAsk)
                     WeeklySetTargetsCard(sessions: sessions)
                     RecoveryCard(sessions: sessions)
                 }
@@ -92,6 +98,62 @@ private struct KaiWeeklyReadCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.fzPrimaryDim)
         .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+    }
+}
+
+// MARK: - AskKaiCard
+
+/// On-demand version of Kai's weekly read (explain_insight skill) — "why
+/// did my momentum drop?" answered against the same InsightsEngine numbers,
+/// instead of only ever getting a scheduled summary.
+private struct AskKaiCard: View {
+    @Binding var question: String
+    let answer: String?
+    let isAsking: Bool
+    let onAsk: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.smallGap) {
+            Text("Ask Kai About This")
+                .font(.fzBody(14, weight: .semibold))
+                .foregroundStyle(Color.fzText)
+
+            HStack(spacing: 8) {
+                TextField("e.g. \"why is my momentum down?\"", text: $question)
+                    .font(.fzBody(13))
+                    .foregroundStyle(Color.fzText)
+                    .padding(10)
+                    .background(Color.fzSurfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+
+                Button(action: onAsk) {
+                    if isAsking {
+                        ProgressView().tint(Color.fzPrimary)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundStyle(question.trimmingCharacters(in: .whitespaces).isEmpty ? Color.fzBorder : Color.fzPrimary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(isAsking || question.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            if let answer {
+                Text(answer)
+                    .font(.fzBody(14))
+                    .foregroundStyle(Color.fzText)
+                    .padding(.top, 4)
+            }
+        }
+        .padding(ForzeeSpacing.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.fzSurface)
+        .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: ForzeeRadius.card)
+                .strokeBorder(Color.fzBorder, lineWidth: 1)
+        )
     }
 }
 

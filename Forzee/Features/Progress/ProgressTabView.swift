@@ -28,6 +28,10 @@ struct ProgressTabView: View {
     @State private var isLoadingInsight = false
     @State private var showPaywall = false
 
+    @State private var askQuestion = ""
+    @State private var askAnswer: String?
+    @State private var isAsking = false
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -41,7 +45,11 @@ struct ProgressTabView: View {
                             weeklyInsight: weeklyInsight,
                             isLoadingInsight: isLoadingInsight,
                             onRefreshInsight: { Task { await loadWeeklyInsight() } },
-                            onUpgrade: { showPaywall = true }
+                            onUpgrade: { showPaywall = true },
+                            askQuestion: $askQuestion,
+                            askAnswer: askAnswer,
+                            isAsking: isAsking,
+                            onAsk: { Task { await askKaiAboutInsights() } }
                         )
                         nutritionCard
                         ForzeeButton(title: "Log a Meal") { showLogSheet = true }
@@ -108,6 +116,16 @@ struct ProgressTabView: View {
         isLoadingInsight = true
         defer { isLoadingInsight = false }
         weeklyInsight = try? await KaiEngine.shared.generateWeeklyInsight(userId: userId)
+    }
+
+    private func askKaiAboutInsights() async {
+        guard let userId = appState.userId else { return }
+        let question = askQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+
+        isAsking = true
+        defer { isAsking = false }
+        askAnswer = try? await KaiEngine.shared.explainInsight(question: question, userId: userId)
     }
 
     private var nutritionCard: some View {
