@@ -78,3 +78,13 @@ enum WorkoutExtractionPrompt {
         """
     }
 }
+
+// MARK: - WorkoutExtractionError
+
+enum WorkoutExtractionError: LocalizedError {
+    case incompletePlan
+
+    var errorDescription: String? {
+        "Found a plan but couldn't pin down every detail — try asking Kai to summarize the full exercise list in one message, then build again."
+    }
+}

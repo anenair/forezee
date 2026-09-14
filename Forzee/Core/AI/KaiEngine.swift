@@ -251,17 +251,23 @@ final class KaiEngine: ObservableObject {
 
     /// Extracts a structured workout from a chat conversation — the "Build
     /// Workout" button in Coach chat. Returns nil if the conversation
-    /// doesn't contain a clear, specific plan yet (found_plan == false, or
-    /// the model omitted a required field for a plan it claimed to find).
+    /// genuinely doesn't contain a plan yet (found_plan == false). Throws
+    /// if the model reported finding one but its structured output didn't
+    /// decode — a distinct case from "no plan," surfaced to the user as
+    /// such rather than the misleading "ask Kai to lay it out."
     func extractWorkoutFromChat(userId: String, history: [KaiMessage]) async throws -> GeneratedWorkout? {
         let model = KaiModel.haiku
         let prompt = WorkoutExtractionPrompt.build(history: history)
 
+        // A full multi-exercise workout easily exceeds completeWithTool's
+        // 300-token default (sized for the much smaller voice-command tool) —
+        // that was silently truncating the JSON and reading as "no plan."
         let input = try await apiClient.completeWithTool(
             model: model,
             systemPrompt: KaiSystemPrompt.identityOnly,
             userMessage: prompt,
-            tool: WorkoutExtractionPrompt.tool
+            tool: WorkoutExtractionPrompt.tool,
+            maxTokens: 1024
         )
 
         await usageGate.recordUsage(
@@ -274,10 +280,14 @@ final class KaiEngine: ObservableObject {
 
         guard input["found_plan"] as? Bool == true else { return nil }
 
-        guard let data = try? JSONSerialization.data(withJSONObject: input) else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: input) else {
+            throw WorkoutExtractionError.incompletePlan
+        }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let decoded = try? decoder.decode(GeneratedWorkout.self, from: data) else { return nil }
+        guard let decoded = try? decoder.decode(GeneratedWorkout.self, from: data) else {
+            throw WorkoutExtractionError.incompletePlan
+        }
 
         let context = await contextBuilder.buildSnapshot(userId: userId)
         return GeneratedWorkout(

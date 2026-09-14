@@ -44,15 +44,25 @@ struct CoachView: View {
                             VStack(alignment: .leading, spacing: ForzeeSpacing.sectionGap) {
                                 briefingCard
 
-                                ForEach(messages) { message in
-                                    MessageBubble(message: message)
-                                }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                                        let isNewTurn = index == 0 || messages[index - 1].role != message.role
+                                        MessageBubble(message: message, showAvatar: isNewTurn)
+                                            .padding(.top, isNewTurn ? 10 : 0)
+                                    }
 
-                                if kaiEngine.isResponding {
-                                    if streamingReply.isEmpty {
-                                        KaiThinkingBubble()
-                                    } else {
-                                        MessageBubble(message: KaiMessage(role: .assistant, content: streamingReply))
+                                    if kaiEngine.isResponding {
+                                        let isNewTurn = messages.last?.role != .assistant
+                                        if streamingReply.isEmpty {
+                                            KaiThinkingBubble(showAvatar: isNewTurn)
+                                                .padding(.top, isNewTurn ? 10 : 0)
+                                        } else {
+                                            MessageBubble(
+                                                message: KaiMessage(role: .assistant, content: streamingReply),
+                                                showAvatar: isNewTurn
+                                            )
+                                            .padding(.top, isNewTurn ? 10 : 0)
+                                        }
                                     }
                                 }
 
@@ -431,19 +441,41 @@ private struct BuildWorkoutRow: View {
 /// a message and the first streamed token arriving — Kai's visual
 /// signature standing in for a generic spinner.
 private struct KaiThinkingBubble: View {
+    let showAvatar: Bool
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            KaiAvatar()
+            KaiAvatarSlot(showAvatar: showAvatar)
 
-            KaiRingsView(size: 28)
-                .frame(width: 28, height: 28)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(Color.fzSurface)
-                .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
-                .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    ThinkingDot(delay: Double(i) * 0.15)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(Color.fzSurface)
+            .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ThinkingDot: View {
+    let delay: Double
+    @State private var scale: CGFloat = 0.6
+
+    var body: some View {
+        Circle()
+            .fill(Color.fzPrimary)
+            .frame(width: 6, height: 6)
+            .scaleEffect(scale)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(delay)) {
+                    scale = 1.0
+                }
+            }
     }
 }
 
@@ -451,6 +483,7 @@ private struct KaiThinkingBubble: View {
 
 private struct MessageBubble: View {
     let message: KaiMessage
+    let showAvatar: Bool
 
     /// Kai's replies are plain text with blank-line paragraph breaks (see
     /// the system prompt's formatting rule) — rendering each as its own
@@ -467,7 +500,7 @@ private struct MessageBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if message.role == .assistant {
-                KaiAvatar()
+                KaiAvatarSlot(showAvatar: showAvatar)
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -487,37 +520,38 @@ private struct MessageBubble: View {
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
                 .shadow(color: .black.opacity(message.role == .assistant ? 0.15 : 0), radius: 5, y: 2)
 
-                Text(message.createdAt, style: .time)
-                    .font(.fzBody(11))
-                    .foregroundStyle(Color.fzTextSecondary.opacity(0.55))
-                    .padding(.horizontal, 4)
+                if showAvatar {
+                    Text(message.createdAt, style: .time)
+                        .font(.fzBody(11))
+                        .foregroundStyle(Color.fzTextSecondary.opacity(0.55))
+                        .padding(.horizontal, 4)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
     }
 }
 
-// MARK: - KaiAvatar
+// MARK: - KaiAvatarSlot
 
-/// Small visual identity for Kai's messages — breaks up long back-and-forth
-/// text with something other than a generic gray box, and echoes the gold/
-/// coral gradient used in the onboarding hero and KaiRingsView.
-private struct KaiAvatar: View {
+/// Kai's visual identity in chat: the same living sound-wave/galaxy
+/// animation used everywhere else (onboarding, thinking indicator), sized
+/// down to an avatar. Only rendered on the first bubble of a consecutive
+/// run from Kai — `showAvatar: false` reserves the same width with an
+/// empty space so later bubbles in the run still line up underneath it,
+/// and so only one instance animates per run rather than one per message.
+private struct KaiAvatarSlot: View {
+    let showAvatar: Bool
+
     var body: some View {
-        Circle()
-            .fill(
-                LinearGradient(
-                    colors: [Color.fzPrimary, Color.fzCoral],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .frame(width: 26, height: 26)
-            .overlay(
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color(hex: "0A0A0F"))
-            )
+        Group {
+            if showAvatar {
+                KaiRingsView(size: 26)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 26, height: 26)
     }
 }
 
