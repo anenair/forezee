@@ -26,6 +26,9 @@ struct CoachView: View {
     @State private var streamingReply: String = ""
     @State private var errorMessage: String?
     @State private var isVoiceModeOn = false
+    @State private var isNearBottom = true
+
+    private static let bottomAnchorId = "bottom"
 
     var body: some View {
         NavigationStack {
@@ -33,29 +36,60 @@ struct CoachView: View {
                 Color.fzBg.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: ForzeeSpacing.sectionGap) {
-                            briefingCard
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: ForzeeSpacing.sectionGap) {
+                                briefingCard
 
-                            ForEach(messages) { message in
-                                MessageBubble(message: message)
-                            }
-
-                            if kaiEngine.isResponding {
-                                if streamingReply.isEmpty {
-                                    KaiThinkingBubble()
-                                } else {
-                                    MessageBubble(message: KaiMessage(role: .assistant, content: streamingReply))
+                                ForEach(messages) { message in
+                                    MessageBubble(message: message)
                                 }
-                            }
 
-                            if let errorMessage {
-                                Text(errorMessage)
-                                    .font(.fzBody(13))
-                                    .foregroundStyle(Color.fzPink)
+                                if kaiEngine.isResponding {
+                                    if streamingReply.isEmpty {
+                                        KaiThinkingBubble()
+                                    } else {
+                                        MessageBubble(message: KaiMessage(role: .assistant, content: streamingReply))
+                                    }
+                                }
+
+                                if let errorMessage {
+                                    Text(errorMessage)
+                                        .font(.fzBody(13))
+                                        .foregroundStyle(Color.fzPink)
+                                }
+
+                                Color.clear.frame(height: 1).id(Self.bottomAnchorId)
+                            }
+                            .padding(ForzeeSpacing.screenPadding)
+                        }
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            geometry.contentOffset.y + geometry.containerSize.height
+                                >= geometry.contentSize.height - 60
+                        } action: { _, nearBottom in
+                            isNearBottom = nearBottom
+                        }
+                        .overlay(alignment: .bottomTrailing) {
+                            if !isNearBottom {
+                                Button(action: { scrollToBottom(proxy: proxy, animated: true) }) {
+                                    Image(systemName: "chevron.down.circle.fill")
+                                        .font(.system(size: 32))
+                                        .foregroundStyle(Color.fzPrimary)
+                                        .background(Circle().fill(Color.fzBg))
+                                }
+                                .padding(.trailing, ForzeeSpacing.screenPadding)
+                                .padding(.bottom, 8)
                             }
                         }
-                        .padding(ForzeeSpacing.screenPadding)
+                        .onChange(of: messages.count) { _, _ in
+                            scrollToBottom(proxy: proxy, animated: true)
+                        }
+                        .onChange(of: streamingReply) { _, _ in
+                            scrollToBottom(proxy: proxy, animated: false)
+                        }
+                        .onAppear {
+                            scrollToBottom(proxy: proxy, animated: false)
+                        }
                     }
 
                     if isVoiceModeOn {
@@ -83,6 +117,16 @@ struct CoachView: View {
         }
         .task { await loadBriefing() }
         .onDisappear { stopVoiceMode() }
+    }
+
+    // MARK: - Scrolling
+
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        if animated {
+            withAnimation { proxy.scrollTo(Self.bottomAnchorId, anchor: .bottom) }
+        } else {
+            proxy.scrollTo(Self.bottomAnchorId, anchor: .bottom)
+        }
     }
 
     // MARK: - Voice Mode

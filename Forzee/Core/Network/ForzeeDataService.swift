@@ -118,7 +118,14 @@ final class ForzeeDataService {
             .single()
             .execute()
 
-        return try JSONDecoder().decode(UserProfile.self, from: response.data)
+        // Postgres timestamps come back as ISO8601 strings — the default
+        // JSONDecoder expects a numeric epoch and fails on those, which
+        // silently drops the whole profile (every caller here uses try?)
+        // and falls back to onboarding-default values (novice, bodyweight,
+        // 45 min) regardless of what the user actually set.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(UserProfile.self, from: response.data)
     }
 
     /// Update profile fields. Pass only the fields you want to change.
@@ -151,7 +158,9 @@ final class ForzeeDataService {
             .limit(limit)
             .execute()
 
-        let messages = try JSONDecoder().decode([StoredMessage].self, from: response.data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let messages = try decoder.decode([StoredMessage].self, from: response.data)
         return messages.reversed()  // Return chronological order
     }
 
