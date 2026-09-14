@@ -52,10 +52,19 @@ enum WorkoutGenerationPrompt {
               "reps": "8-12",
               "weight_kg": null,
               "rest_secs": 90,
-              "notes": "Optional form cue or coaching note for this exercise."
+              "notes": "Optional form cue or coaching note for this exercise.",
+              "primary_muscle_group": "chest|back|shoulders|biceps|triceps|quads|hamstrings|glutes|calves|core|full_body",
+              "secondary_muscle_groups": ["triceps"]
             }
           ]
         }
+
+        primary_muscle_group is required for every exercise — pick the one group \
+        it trains most directly (a bench press is chest, not triceps, even though \
+        triceps assist). secondary_muscle_groups lists any other groups it \
+        meaningfully trains; use an empty array if there genuinely aren't any, \
+        don't pad it out. This tagging feeds the Insights tab's weekly volume \
+        and recovery tracking — get it right, don't guess.
 
         Do not include any prose before or after the JSON.
         """

@@ -306,6 +306,51 @@ final class KaiEngine: ObservableObject {
         )
     }
 
+    /// Kai's weekly read — the named premium differentiator for the
+    /// Insights tab (roadmap Phase 3). Aggregates recent sessions into
+    /// volume/recovery/Momentum (InsightsEngine, pure Swift, no model
+    /// call) and hands that summary to the bundled weekly_insight skill to
+    /// interpret in Kai's own voice. The first real consumer of the Phase 2
+    /// skills framework: no bespoke ClaudeTool, no hand-written prompt file —
+    /// just this method filling placeholders and calling run(skill:).
+    func generateWeeklyInsight(userId: String) async throws -> String {
+        guard let skill = SkillLoader.shared.skill(named: "weekly_insight") else {
+            throw ClaudeAPIError.malformedResponse
+        }
+
+        // A wide lookback (not just the trailing 7 days) — recovery needs
+        // to see further back than the volume window does to say anything
+        // useful about a genuinely stale muscle group.
+        let sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 60)) ?? []
+
+        let volume = InsightsEngine.weeklySetVolume(sessions: sessions)
+        let recovery = InsightsEngine.daysSinceLastTrained(sessions: sessions)
+        let momentum = InsightsEngine.momentumScore(sessions: sessions)
+
+        let volumeSummary = MuscleGroup.allCases.map { group in
+            "\(group.displayName): \(volume[group] ?? 0) of \(group.weeklySetTarget) target sets"
+        }.joined(separator: "\n")
+
+        let recoverySummary = MuscleGroup.allCases.map { group -> String in
+            if let days = recovery[group] {
+                return "\(group.displayName): \(days) day\(days == 1 ? "" : "s") ago"
+            }
+            return "\(group.displayName): no recent session data"
+        }.joined(separator: "\n")
+
+        let input = try await run(
+            skill: skill,
+            placeholders: [
+                "volume_summary": volumeSummary,
+                "recovery_summary": recoverySummary,
+                "momentum_score": String(momentum),
+            ],
+            userId: userId
+        )
+
+        return input["insight"] as? String ?? "Kai couldn't put together this week's read — try again in a bit."
+    }
+
     // MARK: - Skills Framework
 
     /// Runs exactly one named skill, forcing Claude to respond through its

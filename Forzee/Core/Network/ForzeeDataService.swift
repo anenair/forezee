@@ -355,7 +355,7 @@ final class ForzeeDataService {
     func fetchSessionHistory(userId: String, limit: Int = 30) async throws -> [SessionHistoryEntry] {
         let response = try await client
             .from("sessions")
-            .select("*, workouts(name, workout_type)")
+            .select("*, workouts(name, workout_type, exercises)")
             .eq("user_id", value: userId)
             .order("started_at", ascending: false)
             .limit(limit)
@@ -488,10 +488,16 @@ struct SessionSetEntry: Codable {
 struct SessionWorkoutInfo: Codable {
     let name: String
     let workoutType: String
+    /// The prescribed exercises, muscle-group tags included — what
+    /// InsightsEngine cross-references against a session's own sets_log
+    /// (which only carries exercise_name, not muscle group) to attribute
+    /// logged sets to a muscle group.
+    let exercises: [WorkoutExercise]?
 
     enum CodingKeys: String, CodingKey {
         case name
         case workoutType = "workout_type"
+        case exercises
     }
 }
 

@@ -37,7 +37,19 @@ model: haiku
           "reps": { "type": "string", "description": "e.g. \"8-12\" or \"10\"." },
           "weight_kg": { "type": "number", "description": "Omit for bodyweight or user-determined." },
           "rest_secs": { "type": "integer" },
-          "notes": { "type": "string", "description": "Form cue or modification, if any." }
+          "notes": { "type": "string", "description": "Form cue or modification, if any." },
+          "primary_muscle_group": {
+            "type": "string",
+            "enum": ["chest", "back", "shoulders", "biceps", "triceps", "quads", "hamstrings", "glutes", "calves", "core", "full_body"],
+            "description": "The one group this exercise trains most directly — feeds the Insights tab's weekly volume tracking."
+          },
+          "secondary_muscle_groups": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["chest", "back", "shoulders", "biceps", "triceps", "quads", "hamstrings", "glutes", "calves", "core", "full_body"]
+            }
+          }
         },
         "required": ["name", "sets", "reps"]
       }

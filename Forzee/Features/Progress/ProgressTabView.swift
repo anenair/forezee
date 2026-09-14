@@ -24,6 +24,10 @@ struct ProgressTabView: View {
     @State private var sessions: [SessionHistoryEntry] = []
     @State private var isLoadingSessions = false
 
+    @State private var weeklyInsight: String?
+    @State private var isLoadingInsight = false
+    @State private var showPaywall = false
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -31,6 +35,14 @@ struct ProgressTabView: View {
 
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
+                        InsightsSection(
+                            sessions: sessions,
+                            isPremium: appState.subscriptionTier.isPremium,
+                            weeklyInsight: weeklyInsight,
+                            isLoadingInsight: isLoadingInsight,
+                            onRefreshInsight: { Task { await loadWeeklyInsight() } },
+                            onUpgrade: { showPaywall = true }
+                        )
                         nutritionCard
                         ForzeeButton(title: "Log a Meal") { showLogSheet = true }
                         workoutHistorySection
@@ -47,6 +59,9 @@ struct ProgressTabView: View {
                 LogMealSheet(userId: appState.userId) {
                     Task { await loadSummary() }
                 }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
             }
         }
     }
@@ -68,7 +83,7 @@ struct ProgressTabView: View {
                     .foregroundStyle(Color.fzTextSecondary)
             } else {
                 VStack(spacing: ForzeeSpacing.smallGap) {
-                    ForEach(sessions) { session in
+                    ForEach(sessions.prefix(10)) { session in
                         SessionHistoryRow(session: session)
                     }
                 }
@@ -76,11 +91,23 @@ struct ProgressTabView: View {
         }
     }
 
+    /// Fetches a wider window than the "Recent Workouts" feed below needs
+    /// on its own (which shows only the first 10) — InsightsSection reuses
+    /// this same array for Weekly Set Targets and Recovery, and recovery in
+    /// particular needs more than 10 sessions of lookback to say anything
+    /// useful about a genuinely stale muscle group.
     private func loadSessions() async {
         guard let userId = appState.userId else { return }
         isLoadingSessions = true
         defer { isLoadingSessions = false }
-        sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 10)) ?? []
+        sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 30)) ?? []
+    }
+
+    private func loadWeeklyInsight() async {
+        guard let userId = appState.userId else { return }
+        isLoadingInsight = true
+        defer { isLoadingInsight = false }
+        weeklyInsight = try? await KaiEngine.shared.generateWeeklyInsight(userId: userId)
     }
 
     private var nutritionCard: some View {

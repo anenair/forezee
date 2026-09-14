@@ -83,6 +83,13 @@ struct WorkoutExercise: Identifiable, Codable {
     var restSecs: Int
     var notes: String?        // Form cues, modifications, Kai's advice for this exercise
 
+    // Phase 3 "Insights" plumbing — Kai tags these at generation time
+    // (WorkoutGenerationPrompt) or extraction time (extract_workout skill).
+    // Optional and additive: older stored workouts simply decode nil here,
+    // same pattern as restSecs below.
+    var primaryMuscleGroup: MuscleGroup?
+    var secondaryMuscleGroups: [MuscleGroup]
+
     init(
         id: UUID = UUID(),
         exerciseId: String? = nil,
@@ -91,7 +98,9 @@ struct WorkoutExercise: Identifiable, Codable {
         reps: String,
         weightKg: Double? = nil,
         restSecs: Int = 90,
-        notes: String? = nil
+        notes: String? = nil,
+        primaryMuscleGroup: MuscleGroup? = nil,
+        secondaryMuscleGroups: [MuscleGroup] = []
     ) {
         self.id = id
         self.exerciseId = exerciseId
@@ -101,15 +110,22 @@ struct WorkoutExercise: Identifiable, Codable {
         self.weightKg = weightKg
         self.restSecs = restSecs
         self.notes = notes
+        self.primaryMuscleGroup = primaryMuscleGroup
+        self.secondaryMuscleGroups = secondaryMuscleGroups
     }
 
     // MARK: - Decodable
     //
     // Same reasoning as GeneratedWorkout above — Claude's exercise JSON never
     // includes "id", so it needs a fresh UUID rather than a required field.
+    // primaryMuscleGroup/secondaryMuscleGroups are similarly forgiving: an
+    // unrecognized or missing tag decodes to nil/empty rather than failing
+    // the whole exercise, since Claude occasionally free-names a muscle
+    // group not in MuscleGroup's fixed list.
 
     enum CodingKeys: String, CodingKey {
         case id, exerciseId, name, sets, reps, weightKg, restSecs, notes
+        case primaryMuscleGroup, secondaryMuscleGroups
     }
 
     init(from decoder: Decoder) throws {
@@ -122,6 +138,8 @@ struct WorkoutExercise: Identifiable, Codable {
         weightKg = try container.decodeIfPresent(Double.self, forKey: .weightKg)
         restSecs = try container.decodeIfPresent(Int.self, forKey: .restSecs) ?? 90
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        primaryMuscleGroup = (try? container.decodeIfPresent(MuscleGroup.self, forKey: .primaryMuscleGroup)) ?? nil
+        secondaryMuscleGroups = (try? container.decodeIfPresent([MuscleGroup].self, forKey: .secondaryMuscleGroups)) ?? nil ?? []
     }
 }
 
