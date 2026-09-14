@@ -25,6 +25,10 @@ enum AppBootstrap {
         // registered before that delegate callback fires.
         _ = NotificationManager.shared
         // Supabase client is configured lazily in ForzeeDataService.shared
+
+        #if DEBUG
+        SkillValidation.assertAllSkillsValid()
+        #endif
     }
 
     // MARK: - Private

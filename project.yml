@@ -29,7 +29,17 @@ targets:
     platform: iOS
     deploymentTarget: "18.0"
     sources:
+      # Skills/*.md are excluded from this glob and added below as a folder
+      # reference instead — a plain glob entry would copy them flat into the
+      # bundle root, losing the "Skills" subdirectory that
+      # Bundle.main.urls(forResourcesWithExtension:subdirectory:) looks
+      # under (see SkillLoader.swift).
       - path: Forzee
+        excludes:
+          - "Resources/Skills/**"
+      - path: Forzee/Resources/Skills
+        type: folder
+        buildPhase: resources
     configFiles:
       Debug: Secrets.xcconfig
       Release: Secrets.xcconfig

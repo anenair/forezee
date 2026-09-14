@@ -3,10 +3,14 @@
 // Forzee — Core/AI
 //
 // Real LLM understanding of mid-workout voice commands — no local
-// pattern matching. Claude (Haiku, via tool use — see
-// ClaudeAPIClient.completeWithTool) both classifies the intent and
-// extracts weight/reps in one call, forced into structured output
-// via a single tool so the result is always parseable.
+// pattern matching. The tool schema and prompt wording that used
+// to live here as hand-written Swift now live in
+// Resources/Skills/workout_voice_command.md instead (see
+// KaiEngine.interpretWorkoutVoiceCommand, which runs it through
+// the generic skills framework). What's left here is state Swift
+// still owns: the WorkoutVoiceState snapshot, the conditional
+// formatting that turns it into the skill's {{workout_state}}
+// placeholder, and the decoded result type.
 //
 // Haiku, not Sonnet: this fires mid-set, so speed matters, and
 // intent classification + number extraction doesn't need Sonnet's
@@ -18,58 +22,14 @@ import Foundation
 
 enum WorkoutVoiceCommandPrompt {
 
-    static let tool = ClaudeTool(
-        name: "workout_voice_command",
-        description: "Interpret a spoken mid-workout command from the user and decide what to do.",
-        inputSchema: [
-            "type": "object",
-            "properties": [
-                "action": [
-                    "type": "string",
-                    "enum": ["log_set", "next_exercise", "progress", "chat"],
-                    "description": """
-                    log_set: user is reporting a completed set (weight/reps, or \
-                    "same as previous", or just "mark a set done"). next_exercise: \
-                    asking what to do next. progress: asking how they're doing / \
-                    what's left. chat: anything else — an open-ended question that \
-                    needs a real coaching answer, not one of the above.
-                    """,
-                ],
-                "weight_value": [
-                    "type": "number",
-                    "description": "The weight the user said, if any. Omit if not mentioned.",
-                ],
-                "weight_unit": [
-                    "type": "string",
-                    "enum": ["lbs", "kg"],
-                    "description": "Unit for weight_value. Omit if weight_value is omitted.",
-                ],
-                "reps": [
-                    "type": "integer",
-                    "description": "Reps completed, if the user said a number. Omit if not mentioned.",
-                ],
-                "same_as_previous": [
-                    "type": "boolean",
-                    "description": "True if the user said something like \"same as last time\" / \"same weight\".",
-                ],
-                "spoken_reply": [
-                    "type": "string",
-                    "description": """
-                    A short (under 15 words), natural spoken confirmation or answer — \
-                    what Kai should say back out loud. Only used directly for log_set/ \
-                    next_exercise/progress; ignored for chat (that gets a full answer \
-                    elsewhere), but still fill it in with something reasonable.
-                    """,
-                ],
-            ],
-            "required": ["action", "same_as_previous", "spoken_reply"],
-        ]
-    )
-
-    static func build(transcript: String, state: WorkoutVoiceState) -> String {
-        var lines = ["The user just said: \"\(transcript)\""]
-        lines.append("")
-        lines.append("Workout state:")
+    /// Renders the conditional "Workout state:" block the skill's prompt
+    /// template fills into its {{workout_state}} placeholder. Kept in Swift
+    /// rather than the .md file because it branches on live state
+    /// (current exercise present or not, a last-logged set or not) — logic
+    /// a flat placeholder template can't express, only the value it's
+    /// handed. The skill file supplies everything static around it.
+    static func stateBlock(_ state: WorkoutVoiceState) -> String {
+        var lines: [String] = []
 
         if let name = state.currentExerciseName {
             lines.append("- Current exercise: \(name) (\(state.currentExercisePrescription ?? ""))")

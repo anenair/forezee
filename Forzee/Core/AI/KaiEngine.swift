@@ -222,62 +222,67 @@ final class KaiEngine: ObservableObject {
     /// No context snapshot, same reasoning as the companion comment: this
     /// needs to come back fast, and workout state (not sleep/calendar/weather)
     /// is what actually matters for this decision.
+    ///
+    /// This always needs a structured decision back — never plain prose —
+    /// so it goes through the forced single-skill path (`run(skill:)`), not
+    /// `discoverAndRunSkill`'s "Claude may decline" one.
     func interpretWorkoutVoiceCommand(
         userId: String,
         transcript: String,
         state: WorkoutVoiceState
     ) async throws -> WorkoutVoiceCommandResult {
-        let model = KaiModel.haiku
-        let prompt = WorkoutVoiceCommandPrompt.build(transcript: transcript, state: state)
+        guard let skill = SkillLoader.shared.skill(named: "workout_voice_command") else {
+            throw ClaudeAPIError.malformedResponse
+        }
 
-        let input = try await apiClient.completeWithTool(
-            model: model,
-            systemPrompt: KaiSystemPrompt.identityOnly,
-            userMessage: prompt,
-            tool: WorkoutVoiceCommandPrompt.tool
+        let input = try await run(
+            skill: skill,
+            placeholders: [
+                "transcript": transcript,
+                "workout_state": WorkoutVoiceCommandPrompt.stateBlock(state),
+            ],
+            userId: userId
         )
-        let result = WorkoutVoiceCommandResult(from: input)
-
-        await usageGate.recordUsage(
-            userId: userId,
-            taskType: .workoutVoiceCommand,
-            model: model,
-            inputTokens: prompt.estimatedTokenCount,
-            outputTokens: result.spokenReply.estimatedTokenCount
-        )
-
-        return result
+        return WorkoutVoiceCommandResult(from: input)
     }
 
     /// Extracts a structured workout from a chat conversation — the "Build
     /// Workout" button in Coach chat. Returns nil if the conversation
-    /// genuinely doesn't contain a plan yet (found_plan == false). Throws
-    /// if the model reported finding one but its structured output didn't
-    /// decode — a distinct case from "no plan," surfaced to the user as
-    /// such rather than the misleading "ask Kai to lay it out."
+    /// genuinely doesn't contain a plan yet — either because Kai's own
+    /// found_plan field says so, or because Claude didn't reach for the
+    /// extract_workout skill at all (discoverAndRunSkill's "may decline"
+    /// case, which is exactly what a vague/no-plan conversation should
+    /// produce). Throws if the model reported finding one but its
+    /// structured output didn't decode — a distinct case from "no plan,"
+    /// surfaced to the user as such rather than the misleading "ask Kai to
+    /// lay it out."
     func extractWorkoutFromChat(userId: String, history: [KaiMessage]) async throws -> GeneratedWorkout? {
-        let model = KaiModel.haiku
-        let prompt = WorkoutExtractionPrompt.build(history: history)
+        guard let skill = SkillLoader.shared.skill(named: "extract_workout") else {
+            throw WorkoutExtractionError.incompletePlan
+        }
 
-        // A full multi-exercise workout easily exceeds completeWithTool's
-        // 300-token default (sized for the much smaller voice-command tool) —
-        // that was silently truncating the JSON and reading as "no plan."
-        let input = try await apiClient.completeWithTool(
-            model: model,
-            systemPrompt: KaiSystemPrompt.identityOnly,
-            userMessage: prompt,
-            tool: WorkoutExtractionPrompt.tool,
-            maxTokens: 1024
-        )
+        // Only the last N turns matter here — this extracts the latest
+        // agreed plan, not the full history a chat call would need for
+        // tone/context. Rendered through the skill's own template (its
+        // {{transcript}} placeholder) rather than left for
+        // discoverAndRunSkill to fill, since with a single candidate skill
+        // there's no ambiguity about which template governs the message —
+        // that ambiguity is exactly what multi-skill call sites can't do
+        // this rendering step for, which is why discoverAndRunSkill itself
+        // sends the raw conversation rather than a pre-filled template.
+        let transcript = history.suffix(20)
+            .map { "\($0.role == .user ? "User" : "Kai"): \($0.content)" }
+            .joined(separator: "\n")
+        let prompt = skill.renderedPrompt(placeholders: ["transcript": transcript])
 
-        await usageGate.recordUsage(
+        let dispatch = try await discoverAndRunSkill(
+            message: prompt,
             userId: userId,
-            taskType: .workoutExtraction,
-            model: model,
-            inputTokens: prompt.estimatedTokenCount,
-            outputTokens: 0
+            history: [],
+            candidateSkills: [skill]
         )
 
+        guard case .matched(_, let input) = dispatch else { return nil }
         guard input["found_plan"] as? Bool == true else { return nil }
 
         guard let data = try? JSONSerialization.data(withJSONObject: input) else {
@@ -299,6 +304,93 @@ final class KaiEngine: ObservableObject {
             exercises: decoded.exercises,
             contextSnapshot: context
         )
+    }
+
+    // MARK: - Skills Framework
+
+    /// Runs exactly one named skill, forcing Claude to respond through its
+    /// tool — the generic replacement for the old pattern of a bespoke
+    /// KaiEngine method + hand-written ClaudeTool per capability. Use this
+    /// when the caller already knows which skill applies and needs a
+    /// guaranteed structured result (never plain prose) — e.g. a mid-workout
+    /// voice command, which always needs *some* decision back. For "let
+    /// Claude decide whether any of several skills fit," see
+    /// `discoverAndRunSkill` instead.
+    func run(skill: Skill, placeholders: [String: String], userId: String) async throws -> [String: Any] {
+        let prompt = skill.renderedPrompt(placeholders: placeholders)
+
+        let input = try await apiClient.completeWithTool(
+            model: skill.model,
+            systemPrompt: KaiSystemPrompt.identityOnly,
+            userMessage: prompt,
+            tool: skill.tool,
+            maxTokens: 1024
+        )
+
+        // outputTokens: 0 — a generic runner has no per-skill way to know
+        // which output field is the "real" reply text to size (interpretWorkoutVoiceCommand
+        // used to size this off spoken_reply specifically). Usage records
+        // are cost estimates already, not billed truth, so this undercounts
+        // output cost slightly for skills with a substantial text field —
+        // an accepted trade-off for not hand-writing that per skill.
+        await usageGate.recordUsage(
+            userId: userId,
+            taskType: skill.name,
+            model: skill.model,
+            inputTokens: prompt.estimatedTokenCount,
+            outputTokens: 0
+        )
+
+        return input
+    }
+
+    /// Model-layer skill discovery: hands Claude every candidate skill as an
+    /// available tool in one call (`tool_choice: auto`) and lets it decide
+    /// whether one applies — no classifier guessing intent first, and no
+    /// enum case anywhere naming which skills exist. Defaults to every
+    /// bundled skill; pass `candidateSkills` to narrow the set for a call
+    /// site that only makes sense offering one or a few (e.g. a dedicated
+    /// button already declaring its own intent).
+    func discoverAndRunSkill(
+        message: String,
+        userId: String,
+        history: [KaiMessage],
+        candidateSkills: [Skill]? = nil,
+        model: KaiModel = .haiku,
+        systemPrompt: String = KaiSystemPrompt.identityOnly
+    ) async throws -> SkillDispatchResult {
+        let skills = candidateSkills ?? SkillLoader.shared.skills
+        let messages = Array(history.suffix(20)) + [KaiMessage(role: .user, content: message)]
+
+        // The model that decides *and* executes in the same call — deciding
+        // which skill (if any) applies isn't a separate round trip from
+        // producing that skill's structured output, so this is the model
+        // both run on. Defaults to Haiku (fast/cheap intent routing); pass
+        // `model:` when the candidate set needs Sonnet's judgment to
+        // discriminate well.
+        let result = try await apiClient.completeWithTools(
+            model: model,
+            systemPrompt: systemPrompt,
+            messages: messages,
+            tools: skills.map(\.tool)
+        )
+
+        switch result {
+        case .text(let text):
+            return .noSkillMatched(text: text)
+        case .toolUse(let skillName, let input):
+            guard let skill = skills.first(where: { $0.name == skillName }) else {
+                return .noSkillMatched(text: "")
+            }
+            await usageGate.recordUsage(
+                userId: userId,
+                taskType: skill.name,
+                model: skill.model,
+                inputTokens: message.estimatedTokenCount,
+                outputTokens: 0
+            )
+            return .matched(skill: skill, input: input)
+        }
     }
 
     /// A short report after the user finishes a workout — what they actually
@@ -349,6 +441,16 @@ final class KaiEngine: ObservableObject {
         let recentHistory = Array(history.suffix(5))
         return recentHistory + [KaiMessage(role: .user, content: userMessage)]
     }
+}
+
+// MARK: - SkillDispatchResult
+
+/// The outcome of `discoverAndRunSkill` — Claude either picked one of the
+/// candidate skills (with its structured input) or decided none applied,
+/// in which case `text` is whatever plain reply it gave instead.
+enum SkillDispatchResult {
+    case matched(skill: Skill, input: [String: Any])
+    case noSkillMatched(text: String)
 }
 
 // MARK: - KaiModel
