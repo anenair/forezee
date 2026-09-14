@@ -70,13 +70,15 @@ enum DailyBriefingPrompt {
 
     static func build(context: UserContextSnapshot) -> String {
         return """
-        Generate today's morning briefing for this user.
+        Generate today's briefing for this user. It's currently \(context.currentTimeOfDay) \
+        (\(context.currentLocalTime)) for them — match the wording to that, rather than \
+        assuming it's morning. If it's already evening or night, don't suggest "this morning."
 
         Keep it short — 2-3 sentences maximum. Warm but not over-the-top.
         Reference their context naturally if relevant (e.g. last session, goals).
         End with one clear, actionable suggestion for today.
 
-        No greetings like "Good morning!" — just start with the substance.
+        No time-of-day greetings like "Good morning!" or "Good evening!" — just start with the substance.
         """
     }
 }

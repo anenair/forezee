@@ -41,8 +41,12 @@ struct CoachView: View {
                                 MessageBubble(message: message)
                             }
 
-                            if kaiEngine.isResponding, !streamingReply.isEmpty {
-                                MessageBubble(message: KaiMessage(role: .assistant, content: streamingReply))
+                            if kaiEngine.isResponding {
+                                if streamingReply.isEmpty {
+                                    KaiThinkingBubble()
+                                } else {
+                                    MessageBubble(message: KaiMessage(role: .assistant, content: streamingReply))
+                                }
                             }
 
                             if let errorMessage {
@@ -160,7 +164,8 @@ struct CoachView: View {
             }
 
             if isLoadingBriefing {
-                ProgressView().tint(Color.fzPrimary)
+                KaiRingsView(size: 40)
+                    .frame(height: 40)
             } else if let briefing {
                 Text(briefing)
                     .font(.fzBody(15))
@@ -206,6 +211,16 @@ struct CoachView: View {
                 .background(Color.fzSurface)
                 .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
                 .lineLimit(1...4)
+                .submitLabel(.send)
+                .onChange(of: draftMessage) { _, newValue in
+                    // A vertical-axis TextField treats Return as "insert a
+                    // newline" — .onSubmit never fires for it. Detect the
+                    // newline Return appends, strip it, and send instead.
+                    guard newValue.hasSuffix("\n") else { return }
+                    draftMessage.removeLast()
+                    guard canSend else { return }
+                    sendMessage(draftMessage, speakReply: false)
+                }
 
             Button(action: { sendMessage(draftMessage, speakReply: false) }) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -265,6 +280,25 @@ struct CoachView: View {
                 streamingReply = ""
                 if speakReply { listenForWakePhrase() }
             }
+        }
+    }
+}
+
+// MARK: - KaiThinkingBubble
+
+/// Shown in place of the assistant bubble during the gap between sending
+/// a message and the first streamed token arriving — Kai's visual
+/// signature standing in for a generic spinner.
+private struct KaiThinkingBubble: View {
+    var body: some View {
+        HStack {
+            KaiRingsView(size: 32)
+                .frame(width: 32, height: 32)
+                .padding(12)
+                .background(Color.fzSurface)
+                .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+
+            Spacer(minLength: 40)
         }
     }
 }

@@ -42,8 +42,31 @@ final class ContextBuilder {
         return UserContextSnapshot(
             user: buildUserContext(from: p),
             recentContext: buildRecentContext(workoutSummary: ws, lifeSignals: ls),
-            conversationSummary: cs
+            conversationSummary: cs,
+            currentTimeOfDay: Self.currentTimeOfDay(),
+            currentLocalTime: Self.formattedLocalTime()
         )
+    }
+
+    // MARK: - Private — Current Time
+
+    /// Computed fresh on every snapshot build from the device's local clock —
+    /// this is the only way Kai knows it's not morning anymore. Without it,
+    /// prompts referencing "today" default to assuming morning regardless of
+    /// when the user actually opens the app.
+    private static func currentTimeOfDay(date: Date = .now, calendar: Calendar = .current) -> String {
+        switch calendar.component(.hour, from: date) {
+        case 5..<12:  return "morning"
+        case 12..<17: return "afternoon"
+        case 17..<21: return "evening"
+        default:      return "night"
+        }
+    }
+
+    private static func formattedLocalTime(date: Date = .now) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
     }
 
     // MARK: - Private — Profile & History
@@ -207,6 +230,8 @@ struct UserContextSnapshot: Codable {
     let user: UserContext
     let recentContext: RecentContext
     let conversationSummary: String
+    let currentTimeOfDay: String      // "morning" | "afternoon" | "evening" | "night" — device local time
+    let currentLocalTime: String      // e.g. "6:48 PM" — device local time, formatted
 
     /// Encode to compact JSON string for inclusion in system prompt.
     func toCompactJSON() -> String {

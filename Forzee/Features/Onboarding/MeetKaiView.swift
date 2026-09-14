@@ -6,19 +6,15 @@
 //
 // Layout (top → bottom, padding 40 vertical / 24 horizontal):
 //   - Status bar
-//   - Concentric rings visualisation (200×200 frame, layout:none)
-//       • Outer ring:  200×200, fzPrimary stroke 2pt
-//       • Middle ring: 140×140, fzPrimary stroke 1.5pt (dim)
-//       • Inner ring:   80×80,  fzCoral stroke 1pt
-//       • Dot:          12×12,  fzPrimary fill, centred
-//       • Glow:        120×120, purple radial gradient
+//   - Kai visualisation (200×200 frame): a breathing core glow,
+//     sound-wave ripples pulsing outward and fading, and a slow
+//     drifting field of small particles orbiting it — soothing,
+//     continuous motion with a strong, solid centre. See KaiRingsView.
 //   - "Hi, I'm Kai.\nYour AI coach." (32pt, centred)
 //   - Subtitle body text (centred, secondary)
 //   - Profile summary card (YOUR PROFILE label + details)
 //   - Spacer
 //   - "Let's go" primary button
-//
-// Rings animate on appear (rotation + pulse).
 // ============================================================
 
 import SwiftUI
@@ -28,9 +24,6 @@ struct MeetKaiView: View {
     @EnvironmentObject private var viewModel: OnboardingViewModel
     let onLetsGo: () -> Void
 
-    @State private var outerRotation: Double = 0
-    @State private var middleRotation: Double = 0
-    @State private var pulseScale: CGFloat = 1.0
     @State private var contentOpacity: Double = 0
 
     var body: some View {
@@ -41,12 +34,8 @@ struct MeetKaiView: View {
                 Spacer().frame(height: 62)
 
                 VStack(spacing: 32) {
-                    // ── Kai Rings Visualisation ───────────────────
-                    KaiRingsView(
-                        outerRotation: outerRotation,
-                        middleRotation: middleRotation,
-                        pulseScale: pulseScale
-                    )
+                    // ── Kai Visualisation ─────────────────────────
+                    KaiRingsView()
 
                     // ── Text Block ────────────────────────────────
                     VStack(spacing: 16) {
@@ -86,68 +75,7 @@ struct MeetKaiView: View {
             withAnimation(.easeIn(duration: 0.5)) {
                 contentOpacity = 1
             }
-            startRingAnimation()
         }
-    }
-
-    // MARK: - Ring Animation
-
-    private func startRingAnimation() {
-        // Slow continuous outer ring rotation
-        withAnimation(.linear(duration: 12).repeatForever(autoreverses: false)) {
-            outerRotation = 360
-        }
-        // Counter-rotation for middle ring
-        withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
-            middleRotation = -360
-        }
-        // Subtle pulse
-        withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
-            pulseScale = 1.06
-        }
-    }
-}
-
-// MARK: - KaiRingsView
-
-private struct KaiRingsView: View {
-    let outerRotation: Double
-    let middleRotation: Double
-    let pulseScale: CGFloat
-
-    var body: some View {
-        ZStack {
-            // Purple glow
-            RadialGradient(
-                colors: [Color(hex: "6C63FF").opacity(0.19), Color.clear],
-                center: .center, startRadius: 0, endRadius: 60
-            )
-            .frame(width: 120, height: 120)
-
-            // Outer ring — fzPrimary, 2pt stroke
-            Circle()
-                .strokeBorder(Color.fzPrimary, lineWidth: 2)
-                .frame(width: 200, height: 200)
-                .rotationEffect(.degrees(outerRotation))
-                .scaleEffect(pulseScale)
-
-            // Middle ring — fzPrimary dim, 1.5pt
-            Circle()
-                .strokeBorder(Color.fzPrimary.opacity(0.4), lineWidth: 1.5)
-                .frame(width: 140, height: 140)
-                .rotationEffect(.degrees(middleRotation))
-
-            // Inner ring — fzCoral, 1pt
-            Circle()
-                .strokeBorder(Color.fzCoral, lineWidth: 1)
-                .frame(width: 80, height: 80)
-
-            // Centre dot — fzPrimary fill
-            Circle()
-                .fill(Color.fzPrimary)
-                .frame(width: 12, height: 12)
-        }
-        .frame(width: 200, height: 200)
     }
 }
 
