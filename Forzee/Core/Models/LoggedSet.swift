@@ -40,7 +40,7 @@ struct LoggedSet: Identifiable, Equatable {
     }
 }
 
-enum WeightUnit: String {
+enum WeightUnit: String, CaseIterable {
     case lbs
     case kg
 
@@ -48,6 +48,13 @@ enum WeightUnit: String {
         switch self {
         case .lbs: return "pounds"
         case .kg:  return "kilograms"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .lbs: return "Pounds (lb)"
+        case .kg:  return "Kilograms (kg)"
         }
     }
 }

@@ -45,6 +45,21 @@ create table public.profiles (
   -- Injuries or limitations (free text for AI context)
   limitations text,
 
+  -- Training preferences (roadmap Phase 4 "My Plan") — onboarding never
+  -- collects these, they only exist because the My Plan settings screen
+  -- does. `not null default` so an existing row picks up a sane value the
+  -- moment this migration runs, same as every other preference here.
+  -- full_body | upper_lower | push_pull_legs | body_part_split | let_kai_decide
+  training_split text not null default 'let_kai_decide',
+  -- low | moderate | high
+  exercise_variability text not null default 'moderate',
+  warmup_sets_enabled boolean not null default true,
+  circuits_supersets_enabled boolean not null default false,
+  -- lbs | kg — display/phrasing preference only, storage is always kg
+  weight_unit text not null default 'lbs',
+  -- monday | sunday
+  start_of_week text not null default 'monday',
+
   -- Onboarding complete flag
   onboarding_complete boolean default false,
 
