@@ -474,23 +474,32 @@ extension CoachResponse {
         },
         "actions": {
           "type": "array",
-          "description": "Structured actions the user can trigger. Only build_workout, replace_exercise, and log_set are supported right now — every other action type will be ignored. build_workout needs a workout block in the same reply. replace_exercise needs a payload naming the swap, and reads better paired with a confirmation block stating the swap in words. log_set logs one real set against whichever exercise is CURRENTLY ACTIVE in the user's in-progress Workout tab session — never a named exercise, and only when a session is actually active (see the Current Workout Session context, when present). Only include it when the user gave a real rep count, or explicitly said to reuse the previous set — never invent numbers.",
+          "description": "Structured actions the user can trigger. Only these types actually do anything — every other action type will be ignored: build_workout (needs a workout block in the same reply), replace_exercise (payload naming the swap, reads better paired with a confirmation block), log_set (logs one real set against whichever exercise is CURRENTLY ACTIVE — never a named one — only with a real rep count or an explicit reuse-previous), start_workout (starts a repeat of a NAMED past workout — payload.workoutName — only when nothing is already in progress), modify_workout (removes a named exercise from the CURRENTLY ACTIVE session — payload.exerciseName), skip_exercise (marks the CURRENT exercise done with no sets — no payload needed), start_timer (starts a rest timer — payload.seconds), finish_workout (ends the CURRENTLY ACTIVE session — no payload needed, only once at least one set is actually logged), show_exercise (opens that exercise's history — payload.exerciseName, works for any exercise, no session needed), view_progress (switches to the Progress tab — no payload needed).",
           "items": {
             "type": "object",
             "properties": {
               "id": { "type": "string" },
-              "type": { "type": "string", "enum": ["build_workout", "replace_exercise", "log_set"] },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "build_workout", "replace_exercise", "log_set", "start_workout",
+                  "modify_workout", "skip_exercise", "start_timer", "finish_workout",
+                  "show_exercise", "view_progress"
+                ]
+              },
               "label": { "type": "string" },
               "payload": {
                 "type": "object",
-                "description": "Required for type=replace_exercise: exerciseName is the exercise to remove from the workout block in this same reply (must match one there exactly), replacementName is what to swap it in for. For type=log_set: reps is the rep count actually done (required unless sameAsPrevious is \"true\"); weight/weightUnit are the weight actually used (omit both for a bodyweight set); sameAsPrevious (\"true\"/\"false\") reuses whichever of weight/reps isn't given here from the last logged set on the current exercise.",
+                "description": "Required for type=replace_exercise: exerciseName is the exercise to remove from the workout block in this same reply (must match one there exactly), replacementName is what to swap it in for. For type=log_set: reps is the rep count actually done (required unless sameAsPrevious is the literal string true); weight/weightUnit are the weight actually used (omit both for a bodyweight set); sameAsPrevious (the literal string true or false) reuses whichever of weight/reps isn't given here from the last logged set on the current exercise. For type=start_workout: workoutName names a past workout by its title, matched against the user's history. For type=modify_workout or type=show_exercise: exerciseName names the exercise (modify_workout removes it from the current session; show_exercise just opens its history, no session needed). For type=start_timer: seconds is how long to rest, as a string.",
                 "properties": {
                   "exerciseName": { "type": "string" },
                   "replacementName": { "type": "string" },
                   "reps": { "type": "string" },
                   "weight": { "type": "string" },
                   "weightUnit": { "type": "string", "enum": ["lbs", "kg"] },
-                  "sameAsPrevious": { "type": "string", "enum": ["true", "false"] }
+                  "sameAsPrevious": { "type": "string", "enum": ["true", "false"] },
+                  "workoutName": { "type": "string" },
+                  "seconds": { "type": "string" }
                 }
               }
             },

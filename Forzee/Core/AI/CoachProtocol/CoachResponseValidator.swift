@@ -166,11 +166,51 @@ enum CoachResponseValidator {
             let hasReps = (action.payload?["reps"]).flatMap(Int.init).map { $0 > 0 && $0 <= maxReps } ?? false
             let reusesPrevious = action.payload?["sameAsPrevious"] == "true"
             return hasReps || reusesPrevious
-        case .startWorkout, .modifyWorkout, .skipExercise,
-             .startTimer, .finishWorkout, .showExercise, .viewProgress:
-            // Not implemented yet — see CoachActionExecutor. Permitting an
-            // action the executor can't run would render a dead button.
-            return false
+        case .startWorkout:
+            // Never on top of an already-active session — that would
+            // silently discard whatever's currently logged, the same
+            // real (pre-existing) risk "Repeat This Workout" already
+            // carries from WorkoutDetailView, just now reachable from
+            // chat too. Requires a real workout name to look up.
+            guard !WorkoutSessionManager.shared.isActive else { return false }
+            let workoutName = action.payload?["workoutName"]?.trimmingCharacters(in: .whitespaces)
+            return !(workoutName?.isEmpty ?? true)
+        case .modifyWorkout:
+            // Removing an exercise only makes sense against a session
+            // that's actually active, and only for an exercise genuinely
+            // in it — never a name that doesn't match anything, which
+            // would silently no-op with no feedback.
+            guard WorkoutSessionManager.shared.isActive,
+                  let exerciseName = action.payload?["exerciseName"],
+                  !exerciseName.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+            return WorkoutSessionManager.shared.workout?.exercises.contains {
+                $0.name.caseInsensitiveCompare(exerciseName) == .orderedSame
+            } ?? false
+        case .skipExercise:
+            // Same "is there actually something current to act on" guard
+            // as log_set — no payload to validate, it's purely contextual.
+            guard WorkoutSessionManager.shared.isActive,
+                  WorkoutSessionManager.shared.currentExercise != nil else { return false }
+            return true
+        case .startTimer:
+            guard WorkoutSessionManager.shared.isActive,
+                  let seconds = (action.payload?["seconds"]).flatMap(Int.init) else { return false }
+            return seconds > 0 && seconds <= maxRestSeconds
+        case .finishWorkout:
+            // Same "No sets logged" guard Finish Workout already enforces
+            // manually — ending a session with nothing real logged would
+            // save a completion made entirely of placeholder sets.
+            guard WorkoutSessionManager.shared.isActive else { return false }
+            return !WorkoutSessionManager.shared.loggedSets.isEmpty
+        case .showExercise:
+            // Viewing history needs no active session — any exercise
+            // name is fair game, same as tapping History on any exercise
+            // the user has ever logged.
+            let exerciseName = action.payload?["exerciseName"]?.trimmingCharacters(in: .whitespaces)
+            return !(exerciseName?.isEmpty ?? true)
+        case .viewProgress:
+            // Pure navigation, no data at risk — always safe to offer.
+            return true
         case .unknown:
             return false
         }
