@@ -124,29 +124,29 @@ final class KaiEngine: ObservableObject {
     }
 
     /// The Coach tab's structured reply path (see Core/AI/CoachProtocol) —
-    /// every turn comes back as a CoachResponse via a forced tool call,
-    /// never free-form prose. Skill discovery (adjust_plan_from_chat/
-    /// recovery_check) still runs first — a matched skill's plain-text
-    /// reply is wrapped as a single TextBlock so it flows through the
-    /// same rendering and persistence path as everything else, rather
-    /// than needing its own special case (and isn't streamed — those
-    /// replies are short and come back in one shot from run(skill:) either
-    /// way, so `onPartialText` is simply never called for this branch).
+    /// every turn comes back as a CoachResponse. One call hands Claude
+    /// both the main send_coach_response tool AND the candidate skills
+    /// (adjust_plan_from_chat/recovery_check/show_progress) with
+    /// `tool_choice: auto`, so Claude itself decides which one applies —
+    /// no separate "does a skill match?" round trip before the real
+    /// reply even starts. (An earlier version ran skill discovery as its
+    /// own Haiku call first; that meant every message paid for a second
+    /// network round trip, plus a discarded prose answer on the common
+    /// case where nothing matched.)
     ///
     /// Runs schema validation (the Codable decode inside
     /// CoachResponse.from(toolInput:)) and then domain validation
-    /// (CoachResponseValidator.sanitize) before ever returning — a
-    /// response that fails either becomes a graceful fallback text
-    /// reply, never a crash or a nonsensical block reaching the UI.
+    /// (CoachResponseValidator.sanitize) before ever returning a
+    /// send_coach_response result — a response that fails either becomes
+    /// a graceful fallback text reply, never a crash or a nonsensical
+    /// block reaching the UI.
     ///
-    /// `onPartialText` gets a live-typable preview of the reply's first
-    /// text/coaching_note block WHILE it's still generating (see
-    /// IncrementalCoachTextExtractor) — a forced tool call's JSON
-    /// arguments stream the same way plain text does, they just aren't
-    /// valid JSON until the object closes, so only that one field can be
-    /// safely shown incrementally. Later blocks (a workout, say) still
-    /// arrive, they just appear fully-formed with the rest of the reply
-    /// once it completes rather than typing themselves out.
+    /// `onPartialText` gets a live-typable preview WHILE the reply is
+    /// still generating: plain text streams directly, and a
+    /// send_coach_response tool call gets its first text/coaching_note
+    /// block previewed via IncrementalCoachTextExtractor (see
+    /// ClaudeAPIClient.streamCompletionWithTools) — a matched skill's
+    /// short JSON payload isn't previewed, it just resolves in one shot.
     func sendCoachMessage(
         message: String,
         userId: String,
@@ -161,50 +161,57 @@ final class KaiEngine: ObservableObject {
 
         try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
 
-        let candidates = ["adjust_plan_from_chat", "recovery_check", "show_progress"].compactMap(SkillLoader.shared.skill(named:))
-        if !candidates.isEmpty,
-           let dispatch = try? await discoverAndRunSkill(
-                message: message, userId: userId, history: history,
-                candidateSkills: candidates, systemPrompt: KaiSystemPrompt.build(context: context)
-           ),
-           case .matched(let skill, let input) = dispatch {
-            let response: CoachResponse
-            if skill.name == "show_progress" {
-                // Haiku only identified WHICH exercise — the numbers below
-                // come straight from real logged sets (InsightsEngine),
-                // never from the model, matching the system prompt's
-                // "never fabricate health data" rule.
-                response = await buildProgressResponse(exerciseName: input["exercise_name"] as? String, userId: userId)
-            } else {
-                let replyText = handleChatSkillReply(skill, input: input)
-                if skill.name == "adjust_plan_from_chat" {
-                    try? await applyPlanAdjustment(input, userId: userId)
-                }
-                response = CoachResponse(blocks: [.text(TextBlock(content: replyText))])
-            }
-            try? await ForzeeDataService.shared.saveMessage(
-                KaiMessage(role: .assistant, content: response.encodedContent()), userId: userId
-            )
-            return response
-        }
-
+        let candidateSkills = ["adjust_plan_from_chat", "recovery_check", "show_progress"].compactMap(SkillLoader.shared.skill(named:))
         let model = taskClassifier.classify(message: message, context: context)
         let messages = assembleMessages(userMessage: message, history: history, context: context)
+        let tools = candidateSkills.map(\.tool) + [CoachResponse.tool]
 
-        let response: CoachResponse
+        var response: CoachResponse
+        var matchedSkillForUsage: Skill?
         do {
-            let toolInput = try await apiClient.streamCompletionWithForcedTool(
+            let result = try await apiClient.streamCompletionWithTools(
                 model: model,
                 systemPrompt: KaiSystemPrompt.build(context: context),
                 messages: messages,
-                tool: CoachResponse.tool,
-                onPartialJSON: { buffer in
-                    guard let preview = IncrementalCoachTextExtractor.preview(fromRawJSON: buffer) else { return }
-                    onPartialText(preview)
-                }
+                tools: tools,
+                previewToolName: CoachResponse.tool.name,
+                onPartialText: onPartialText
             )
-            let decoded = try CoachResponse.from(toolInput: toolInput)
-            response = CoachResponseValidator.sanitize(decoded)
+
+            switch result {
+            case .toolUse(let name, let input) where name == CoachResponse.tool.name:
+                let decoded = try CoachResponse.from(toolInput: input)
+                response = CoachResponseValidator.sanitize(decoded)
+
+            case .toolUse(let name, let input):
+                if let skill = candidateSkills.first(where: { $0.name == name }) {
+                    matchedSkillForUsage = skill
+                    if skill.name == "show_progress" {
+                        // Haiku/Sonnet only identified WHICH exercise — the
+                        // numbers below come straight from real logged sets
+                        // (InsightsEngine), never from the model, matching
+                        // the system prompt's "never fabricate health data"
+                        // rule.
+                        response = await buildProgressResponse(exerciseName: input["exercise_name"] as? String, userId: userId)
+                    } else {
+                        let replyText = handleChatSkillReply(skill, input: input)
+                        if skill.name == "adjust_plan_from_chat" {
+                            try? await applyPlanAdjustment(input, userId: userId)
+                        }
+                        response = CoachResponse(blocks: [.text(TextBlock(content: replyText))])
+                    }
+                } else {
+                    response = CoachResponse(blocks: [.text(TextBlock(
+                        content: "Something in Kai's skills got confused — try again."
+                    ))])
+                }
+
+            case .text(let text):
+                // Claude chose not to call any tool — still not an error,
+                // just wrap it exactly like an old pre-protocol message
+                // (see CoachResponse.parse(legacyContent:)).
+                response = CoachResponse(blocks: [.text(TextBlock(content: text))])
+            }
         } catch {
             // Schema validation (decode) or the network call itself
             // failed — never surface that as a broken chat bubble.
@@ -213,11 +220,18 @@ final class KaiEngine: ObservableObject {
             ))])
         }
 
-        await usageGate.recordUsage(
-            userId: userId, taskType: .chatMessage, model: model,
-            inputTokens: messages.estimatedTokenCount,
-            outputTokens: response.plainTextSummary.estimatedTokenCount
-        )
+        if let skill = matchedSkillForUsage {
+            await usageGate.recordUsage(
+                userId: userId, taskType: skill.name, model: model,
+                inputTokens: messages.estimatedTokenCount, outputTokens: 0
+            )
+        } else {
+            await usageGate.recordUsage(
+                userId: userId, taskType: .chatMessage, model: model,
+                inputTokens: messages.estimatedTokenCount,
+                outputTokens: response.plainTextSummary.estimatedTokenCount
+            )
+        }
 
         try? await ForzeeDataService.shared.saveMessage(
             KaiMessage(role: .assistant, content: response.encodedContent()), userId: userId

@@ -273,6 +273,126 @@ final class ClaudeAPIClient {
         return input
     }
 
+    /// Same idea as `streamCompletionWithForcedTool`, but `tool_choice: auto`
+    /// over several tools at once — Claude picks whichever one applies (or
+    /// none, replying in plain text) in a single round trip, instead of a
+    /// caller running a separate "does any of these apply?" call first and
+    /// only then making this one. Every tool gets `eager_input_streaming`
+    /// so a tool-use pick still streams incrementally, exactly like
+    /// `streamCompletionWithForcedTool`; `previewToolName` names which one
+    /// of the given tools' input should get a live text preview via
+    /// `IncrementalCoachTextExtractor` while it's still generating (the
+    /// others resolve in one shot when they close — they're short enough
+    /// that there's nothing worth previewing).
+    func streamCompletionWithTools(
+        model: KaiModel,
+        systemPrompt: String,
+        messages: [KaiMessage],
+        tools: [ClaudeTool],
+        previewToolName: String,
+        maxTokens: Int = 8192,
+        onPartialText: @escaping (String) -> Void
+    ) async throws -> StreamedAutoToolResult {
+        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
+            throw ClaudeAPIError.apiKeyNotConfigured
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "max_tokens": maxTokens,
+            "stream": true,
+            "system": systemPrompt,
+            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "tools": tools.map {
+                ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema, "eager_input_streaming": true]
+            },
+            "tool_choice": ["type": "auto"],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (asyncBytes, response) = try await urlSession.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeAPIError.invalidResponse
+        }
+        try validateStatusCode(httpResponse.statusCode)
+
+        // Anthropic's stream can carry more than one content block (e.g. a
+        // tool_use alongside stray prose), each identified by its own
+        // `index` in content_block_start/delta events — this tracks all of
+        // them rather than assuming there's exactly one, the same way
+        // parseToolChoiceResponse does for the non-streaming multi-tool path.
+        var blockOrder: [Int] = []
+        var blockKinds: [Int: String] = [:]
+        var blockToolNames: [Int: String] = [:]
+        var blockBuffers: [Int: String] = [:]
+
+        for try await line in asyncBytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let json = String(line.dropFirst(6))
+            guard json != "[DONE]" else { break }
+            guard let data = json.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = obj["type"] as? String else { continue }
+
+            switch type {
+            case "content_block_start":
+                guard let index = obj["index"] as? Int,
+                      let block = obj["content_block"] as? [String: Any],
+                      let blockType = block["type"] as? String else { continue }
+                blockOrder.append(index)
+                blockKinds[index] = blockType
+                blockBuffers[index] = ""
+                if blockType == "tool_use", let name = block["name"] as? String {
+                    blockToolNames[index] = name
+                }
+
+            case "content_block_delta":
+                guard let index = obj["index"] as? Int,
+                      let delta = obj["delta"] as? [String: Any],
+                      let deltaType = delta["type"] as? String else { continue }
+                if deltaType == "text_delta", let text = delta["text"] as? String {
+                    blockBuffers[index, default: ""] += text
+                    let fullText = blockBuffers[index] ?? ""
+                    await MainActor.run { onPartialText(fullText) }
+                } else if deltaType == "input_json_delta", let fragment = delta["partial_json"] as? String {
+                    blockBuffers[index, default: ""] += fragment
+                    if blockToolNames[index] == previewToolName,
+                       let preview = IncrementalCoachTextExtractor.preview(fromRawJSON: blockBuffers[index] ?? "") {
+                        await MainActor.run { onPartialText(preview) }
+                    }
+                }
+
+            default:
+                continue
+            }
+        }
+
+        // A tool call wins over any accompanying prose — same rule as
+        // parseToolChoiceResponse. First one in generation order, in the
+        // rare case Claude emits more than one.
+        for index in blockOrder where blockKinds[index] == "tool_use" {
+            guard let name = blockToolNames[index] else { continue }
+            let jsonText = blockBuffers[index] ?? ""
+            guard let data = jsonText.data(using: .utf8),
+                  let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw ClaudeAPIError.malformedResponse
+            }
+            return .toolUse(name: name, input: input)
+        }
+
+        let text = blockOrder
+            .filter { blockKinds[$0] == "text" }
+            .compactMap { blockBuffers[$0] }
+            .joined()
+        return .text(text)
+    }
+
     private func parseInputJSONDelta(_ json: String) -> String? {
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -450,6 +570,16 @@ struct ClaudeTool {
 /// the candidate tools, or replied in plain text because none applied.
 enum ClaudeToolChoiceResult {
     case toolUse(skillName: String, input: [String: Any])
+    case text(String)
+}
+
+// MARK: - StreamedAutoToolResult
+
+/// The outcome of a `streamCompletionWithTools` call — same shape as
+/// `ClaudeToolChoiceResult`, just named separately since the streamed and
+/// non-streamed multi-tool paths are independent call sites today.
+enum StreamedAutoToolResult {
+    case toolUse(name: String, input: [String: Any])
     case text(String)
 }
 
