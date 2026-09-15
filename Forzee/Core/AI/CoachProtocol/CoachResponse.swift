@@ -474,19 +474,23 @@ extension CoachResponse {
         },
         "actions": {
           "type": "array",
-          "description": "Structured actions the user can trigger. Only build_workout and replace_exercise are supported right now — every other action type will be ignored. build_workout needs a workout block in the same reply. replace_exercise needs a payload naming the swap, and reads better paired with a confirmation block stating the swap in words.",
+          "description": "Structured actions the user can trigger. Only build_workout, replace_exercise, and log_set are supported right now — every other action type will be ignored. build_workout needs a workout block in the same reply. replace_exercise needs a payload naming the swap, and reads better paired with a confirmation block stating the swap in words. log_set logs one real set against whichever exercise is CURRENTLY ACTIVE in the user's in-progress Workout tab session — never a named exercise, and only when a session is actually active (see the Current Workout Session context, when present). Only include it when the user gave a real rep count, or explicitly said to reuse the previous set — never invent numbers.",
           "items": {
             "type": "object",
             "properties": {
               "id": { "type": "string" },
-              "type": { "type": "string", "enum": ["build_workout", "replace_exercise"] },
+              "type": { "type": "string", "enum": ["build_workout", "replace_exercise", "log_set"] },
               "label": { "type": "string" },
               "payload": {
                 "type": "object",
-                "description": "Required for type=replace_exercise: exerciseName is the exercise to remove from the workout block in this same reply (must match one there exactly), replacementName is what to swap it in for.",
+                "description": "Required for type=replace_exercise: exerciseName is the exercise to remove from the workout block in this same reply (must match one there exactly), replacementName is what to swap it in for. For type=log_set: reps is the rep count actually done (required unless sameAsPrevious is \"true\"); weight/weightUnit are the weight actually used (omit both for a bodyweight set); sameAsPrevious (\"true\"/\"false\") reuses whichever of weight/reps isn't given here from the last logged set on the current exercise.",
                 "properties": {
                   "exerciseName": { "type": "string" },
-                  "replacementName": { "type": "string" }
+                  "replacementName": { "type": "string" },
+                  "reps": { "type": "string" },
+                  "weight": { "type": "string" },
+                  "weightUnit": { "type": "string", "enum": ["lbs", "kg"] },
+                  "sameAsPrevious": { "type": "string", "enum": ["true", "false"] }
                 }
               }
             },

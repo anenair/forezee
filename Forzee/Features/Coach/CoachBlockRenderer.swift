@@ -327,6 +327,7 @@ struct CoachActionRow: View {
         switch action.type {
         case .buildWorkout:    return "dumbbell.fill"
         case .replaceExercise: return "arrow.triangle.2.circlepath"
+        case .logSet:          return "checkmark.circle.fill"
         default:                return "bolt.fill"
         }
     }

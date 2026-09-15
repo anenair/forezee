@@ -13,30 +13,35 @@
 
 import Foundation
 
-/// What running an action actually did — a build_workout hands AppState a
-/// real GeneratedWorkout (nothing about the chat message itself changes);
-/// a replace_exercise instead mutates the SAME message's own workout
-/// block, so the caller needs the updated CoachResponse back to re-store
-/// against that message. `.none` covers "not permitted" and "not
-/// implemented" alike — the caller doesn't need to tell those apart.
+/// What running an action actually did — a build_workout starts a real
+/// GeneratedWorkout session in WorkoutSessionManager (nothing about the
+/// chat message itself changes); a replace_exercise instead mutates the
+/// SAME message's own workout block, so the caller needs the updated
+/// CoachResponse back to re-store against that message; a log_set writes
+/// a real set into whatever session is active, same as WorkoutTabView's
+/// own manual entry or voice mode would. `.none` covers "not permitted"
+/// and "not implemented" alike — the caller doesn't need to tell those apart.
 enum CoachActionOutcome {
     case builtWorkout(GeneratedWorkout)
     case updatedResponse(CoachResponse)
+    case loggedSet(LogSetOutcome)
     case none
 }
 
 @MainActor
 enum CoachActionExecutor {
 
-    static func execute(_ action: CoachAction, from response: CoachResponse, appState: AppState) -> CoachActionOutcome {
+    static func execute(_ action: CoachAction, from response: CoachResponse) -> CoachActionOutcome {
         guard CoachResponseValidator.isPermitted(action, in: response.blocks) else { return .none }
 
         switch action.type {
         case .buildWorkout:
-            return buildWorkout(from: response, appState: appState)
+            return buildWorkout(from: response)
         case .replaceExercise:
             return replaceExercise(action, in: response)
-        case .startWorkout, .modifyWorkout, .logSet, .skipExercise,
+        case .logSet:
+            return logSet(action)
+        case .startWorkout, .modifyWorkout, .skipExercise,
              .startTimer, .finishWorkout, .showExercise, .viewProgress, .unknown:
             // isPermitted already excludes all of these — unreachable in
             // practice, kept explicit rather than a `default:` so adding a
@@ -46,16 +51,16 @@ enum CoachActionExecutor {
     }
 
     /// Converts the SAME workout block already rendered in this response
-    /// into a real GeneratedWorkout via WorkoutBuilder, and hands it to
-    /// AppState exactly like the Workout tab's own Generate button
-    /// already does. No second LLM call needed: the structured block IS
-    /// the proposal, nothing needs re-extracting from prose the way the
-    /// old chat-based "Build Workout" flow had to.
-    private static func buildWorkout(from response: CoachResponse, appState: AppState) -> CoachActionOutcome {
+    /// into a real GeneratedWorkout via WorkoutBuilder, and starts it in
+    /// WorkoutSessionManager exactly like the Workout tab's own Generate
+    /// button already does — so either path lands the user on the same
+    /// in-progress session. No second LLM call needed: the structured
+    /// block IS the proposal, nothing needs re-extracting from prose the
+    /// way the old chat-based "Build Workout" flow had to.
+    private static func buildWorkout(from response: CoachResponse) -> CoachActionOutcome {
         guard let workoutBlock = firstWorkoutBlock(in: response.blocks) else { return .none }
         let workout = WorkoutBuilder.build(from: workoutBlock.workout)
-        appState.activeWorkout = workout
-        appState.isRepeatWorkout = false
+        WorkoutSessionManager.shared.start(workout)
         return .builtWorkout(workout)
     }
 
@@ -99,6 +104,31 @@ enum CoachActionExecutor {
             metadata: response.metadata
         )
         return .updatedResponse(updated)
+    }
+
+    /// Logs a real set into whatever session WorkoutSessionManager already
+    /// has active — always against the CURRENT exercise (isPermitted
+    /// already confirmed a session exists), never a named one. Uses the
+    /// exact same logNextSet resolution ("same as previous," the
+    /// prescribed-weight fallback, marking the exercise complete on the
+    /// last set) that WorkoutTabView's own voice mode already relies on —
+    /// this is genuinely the same operation, just triggered from Coach
+    /// chat instead of a mic.
+    private static func logSet(_ action: CoachAction) -> CoachActionOutcome {
+        let payload = action.payload ?? [:]
+        let reps = payload["reps"].flatMap(Int.init)
+        let weightValue = payload["weight"].flatMap(Double.init)
+        let weightUnit: WeightUnit? = weightValue == nil ? nil : (payload["weightUnit"].flatMap(WeightUnit.init(rawValue:)) ?? .lbs)
+        let sameAsPrevious = payload["sameAsPrevious"] == "true"
+
+        guard let outcome = WorkoutSessionManager.shared.logNextSet(
+            weightValue: weightValue,
+            weightUnit: weightUnit,
+            reps: reps,
+            sameAsPrevious: sameAsPrevious
+        ) else { return .none }
+
+        return .loggedSet(outcome)
     }
 
     private static func firstWorkoutBlock(in blocks: [CoachBlock]) -> WorkoutBlock? {
