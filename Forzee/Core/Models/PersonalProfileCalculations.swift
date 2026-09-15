@@ -32,6 +32,14 @@ extension UserProfile {
     /// should moralize about.
     var bmiCategory: String? {
         guard let bmi else { return nil }
+        return Self.bmiCategory(for: bmi)
+    }
+
+    /// Same bands as `bmiCategory`, but for a BMI value that isn't
+    /// necessarily this profile's *current* one — e.g. AboutYouView's
+    /// target-weight-by-BMI slider, which previews a category for a BMI
+    /// the user hasn't actually reached yet.
+    static func bmiCategory(for bmi: Double) -> String {
         switch bmi {
         case ..<18.5: return "Underweight"
         case 18.5..<25: return "Healthy range"

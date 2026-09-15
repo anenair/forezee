@@ -39,6 +39,7 @@ final class NotificationManager: NSObject, ObservableObject {
 
     private enum Identifier {
         static let reengagement = "forzee.reengagement"
+        static let restTimer = "forzee.resttimer"
         static func workoutReminder(_ day: Weekday) -> String { "forzee.workout.\(day.rawValue)" }
     }
 
@@ -150,6 +151,31 @@ final class NotificationManager: NSObject, ObservableObject {
         default: // "guided"
             return (3, "No pressure — just checking in. Whenever you're ready.")
         }
+    }
+
+    // MARK: - Rest Timer
+
+    /// A one-off local alert N seconds out — the background half of the
+    /// in-workout rest timer (see WorkoutTabView's own countdown banner,
+    /// which covers the foreground case). Idempotent: replaces any
+    /// already-pending rest alert, since starting a new set's rest always
+    /// supersedes whatever was left of the previous one.
+    func scheduleRestTimerAlert(seconds: Int) {
+        cancelRestTimerAlert()
+        guard isAuthorized, seconds > 0 else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Forzee"
+        content.body = "Rest's up — next set."
+        content.sound = .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(seconds), repeats: false)
+        let request = UNNotificationRequest(identifier: Identifier.restTimer, content: content, trigger: trigger)
+        center.add(request)
+    }
+
+    func cancelRestTimerAlert() {
+        center.removePendingNotificationRequests(withIdentifiers: [Identifier.restTimer])
     }
 
     // MARK: - Sign Out

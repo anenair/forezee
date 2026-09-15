@@ -33,7 +33,13 @@ struct AboutYouView: View {
     @State private var heightInchesText = ""
     @State private var heightCmText = ""
     @State private var currentWeightText = ""
-    @State private var targetWeightText = ""
+
+    // Target weight — set by dialing in a target BMI rather than typing a
+    // weight directly, since height is already on this screen and BMI is
+    // the more meaningful dial for "what am I aiming for." The weight
+    // shown/stored is always derived: targetBMI × height², never typed.
+    @State private var hasTargetWeight = false
+    @State private var targetBMI: Double = 22.0
 
     // Body composition
     @State private var bodyFatText = ""
@@ -175,7 +181,52 @@ struct AboutYouView: View {
                 }
 
                 numberField(label: "Current weight (\(weightUnitLabel))", text: $currentWeightText)
-                numberField(label: "Target weight (\(weightUnitLabel)) — optional", text: $targetWeightText)
+                targetWeightSlider
+            }
+        }
+    }
+
+    private var targetWeightSlider: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $hasTargetWeight) {
+                Text("Set a target weight")
+                    .font(.fzBody(14))
+                    .foregroundStyle(Color.fzText)
+            }
+            .tint(Color.fzPrimary)
+
+            if hasTargetWeight {
+                if let heightCm = resolvedHeightCm(), heightCm > 0 {
+                    let heightM = heightCm / 100
+                    let weightKg = targetBMI * heightM * heightM
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Target weight — optional")
+                                .font(.fzBody(12))
+                                .foregroundStyle(Color.fzTextSecondary)
+                            Spacer()
+                            Text("\(formattedWeight(fromKg: weightKg)) \(weightUnitLabel)")
+                                .font(.fzMono(14, weight: .semibold))
+                                .foregroundStyle(Color.fzText)
+                        }
+                        Slider(value: $targetBMI, in: 15...40, step: 0.1)
+                            .tint(Color.fzPrimary)
+                        HStack {
+                            Text("BMI \(String(format: "%.1f", targetBMI))")
+                                .font(.fzMono(12, weight: .medium))
+                                .foregroundStyle(Color.fzPrimary)
+                            Spacer()
+                            Text(UserProfile.bmiCategory(for: targetBMI))
+                                .font(.fzBody(12))
+                                .foregroundStyle(Color.fzTextSecondary)
+                        }
+                    }
+                } else {
+                    Text("Enter your height above to set a target weight by BMI.")
+                        .font(.fzBody(12))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
             }
         }
     }
@@ -272,6 +323,16 @@ struct AboutYouView: View {
         return isImperial ? value * 2.54 : value
     }
 
+    /// The actual target-weight value to store — derived from the BMI
+    /// slider and height, never typed directly. nil whenever the toggle is
+    /// off or height isn't known yet, which on save clears any
+    /// previously-stored target rather than leaving a stale one behind.
+    private func resolvedTargetWeightKg() -> Double? {
+        guard hasTargetWeight, let heightCm = resolvedHeightCm(), heightCm > 0 else { return nil }
+        let heightM = heightCm / 100
+        return targetBMI * heightM * heightM
+    }
+
     /// Boxes a value for the `[String: Any]` updates dict, using NSNull
     /// (not Swift's nil) to explicitly clear a field — JSONSerialization
     /// serializes NSNull as JSON `null`, which Postgres reads as "set this
@@ -322,8 +383,10 @@ struct AboutYouView: View {
         if let weight = profile.currentWeightKg {
             currentWeightText = formattedWeight(fromKg: weight)
         }
-        if let target = profile.targetWeightKg {
-            targetWeightText = formattedWeight(fromKg: target)
+        if let target = profile.targetWeightKg, let heightCm = profile.heightCm, heightCm > 0 {
+            hasTargetWeight = true
+            let heightM = heightCm / 100
+            targetBMI = target / (heightM * heightM)
         }
         if let bodyFat = profile.bodyFatPercent {
             bodyFatText = formattedNumber(bodyFat)
@@ -351,7 +414,7 @@ struct AboutYouView: View {
         updates["date_of_birth"] = anyOrNull(shareBirthDate ? ISO8601DateFormatter().string(from: dateOfBirth) : nil)
         updates["height_cm"] = anyOrNull(resolvedHeightCm())
         updates["current_weight_kg"] = anyOrNull(resolvedWeightKg(currentWeightText))
-        updates["target_weight_kg"] = anyOrNull(resolvedWeightKg(targetWeightText))
+        updates["target_weight_kg"] = anyOrNull(resolvedTargetWeightKg())
         updates["body_fat_percent"] = anyOrNull(Double(bodyFatText))
         updates["waist_cm"] = anyOrNull(resolvedLengthCm(waistText))
         updates["hip_cm"] = anyOrNull(resolvedLengthCm(hipText))
@@ -366,7 +429,7 @@ struct AboutYouView: View {
             profile.dateOfBirth = shareBirthDate ? dateOfBirth : nil
             profile.heightCm = resolvedHeightCm()
             profile.currentWeightKg = resolvedWeightKg(currentWeightText)
-            profile.targetWeightKg = resolvedWeightKg(targetWeightText)
+            profile.targetWeightKg = resolvedTargetWeightKg()
             profile.bodyFatPercent = Double(bodyFatText)
             profile.waistCm = resolvedLengthCm(waistText)
             profile.hipCm = resolvedLengthCm(hipText)

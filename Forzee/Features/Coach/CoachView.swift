@@ -27,9 +27,13 @@ struct CoachView: View {
     @State private var errorMessage: String?
     @State private var isVoiceModeOn = false
     @State private var isNearBottom = true
-    @State private var isBuildingWorkout = false
-    @State private var workoutBuildError: String?
-    @State private var workoutBuiltConfirmation: String?
+
+    // Build Workout — tied to whichever specific assistant message actually
+    // proposed a plan (see isWorkoutProposal), not a single global affordance
+    // floating at the end of the conversation regardless of what's been said.
+    @State private var buildingMessageId: UUID?
+    @State private var buildConfirmations: [UUID: String] = [:]
+    @State private var buildErrors: [UUID: String] = [:]
 
     private static let bottomAnchorId = "bottom"
 
@@ -49,6 +53,17 @@ struct CoachView: View {
                                         let isNewTurn = index == 0 || messages[index - 1].role != message.role
                                         MessageBubble(message: message, showAvatar: isNewTurn)
                                             .padding(.top, isNewTurn ? 10 : 0)
+
+                                        if isWorkoutProposal(message) {
+                                            BuildWorkoutRow(
+                                                isBuilding: buildingMessageId == message.id,
+                                                confirmation: buildConfirmations[message.id],
+                                                error: buildErrors[message.id],
+                                                onBuild: { Task { await buildWorkoutFromChat(triggeredBy: message) } },
+                                                onOpenWorkoutTab: { appState.activeTab = .workout }
+                                            )
+                                            .padding(.leading, 34)
+                                        }
                                     }
 
                                     if kaiEngine.isResponding {
@@ -70,16 +85,6 @@ struct CoachView: View {
                                     Text(errorMessage)
                                         .font(.fzBody(13))
                                         .foregroundStyle(Color.fzPink)
-                                }
-
-                                if !kaiEngine.isResponding, messages.contains(where: { $0.role == .assistant }) {
-                                    BuildWorkoutRow(
-                                        isBuilding: isBuildingWorkout,
-                                        confirmation: workoutBuiltConfirmation,
-                                        error: workoutBuildError,
-                                        onBuild: { Task { await buildWorkoutFromChat() } },
-                                        onOpenWorkoutTab: { appState.activeTab = .workout }
-                                    )
                                 }
 
                                 Color.clear.frame(height: 1).id(Self.bottomAnchorId)
@@ -152,24 +157,40 @@ struct CoachView: View {
 
     // MARK: - Build Workout
 
+    /// Kai is instructed (see KaiSystemPrompt's Rules) to lay out a settled
+    /// workout as plain lines each prefixed "- ", then point the user at
+    /// "Build Workout From This Chat" — so a reply matching that shape is
+    /// the one this affordance attaches to, right where the plan was
+    /// actually proposed, instead of floating at the bottom of the whole
+    /// conversation regardless of what's actually been said since.
+    private func isWorkoutProposal(_ message: KaiMessage) -> Bool {
+        guard message.role == .assistant else { return false }
+        return message.content
+            .components(separatedBy: "\n")
+            .contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ") }
+    }
+
     /// Extracts whatever workout the conversation has settled on so far and
     /// hands it to WorkoutTabView via AppState — the exercises as actually
     /// negotiated in chat (added/removed/adjusted), not a generic re-roll.
-    private func buildWorkoutFromChat() async {
+    /// Still reads the *full* running history (Kai may have refined the plan
+    /// in later messages), but the resulting confirmation/error is scoped to
+    /// the specific message the user tapped it from.
+    private func buildWorkoutFromChat(triggeredBy message: KaiMessage) async {
         guard let userId = appState.userId else { return }
-        isBuildingWorkout = true
-        workoutBuildError = nil
-        defer { isBuildingWorkout = false }
+        buildingMessageId = message.id
+        buildErrors[message.id] = nil
+        defer { buildingMessageId = nil }
 
         do {
             guard let workout = try await kaiEngine.extractWorkoutFromChat(userId: userId, history: messages) else {
-                workoutBuildError = "Couldn't find a clear plan yet — ask Kai to lay out the exercises first."
+                buildErrors[message.id] = "Couldn't find a clear plan yet — ask Kai to lay out the exercises first."
                 return
             }
             appState.activeWorkout = workout
-            workoutBuiltConfirmation = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
+            buildConfirmations[message.id] = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
         } catch {
-            workoutBuildError = error.localizedDescription
+            buildErrors[message.id] = error.localizedDescription
         }
     }
 
@@ -355,8 +376,6 @@ struct CoachView: View {
 
         draftMessage = ""
         errorMessage = nil
-        workoutBuiltConfirmation = nil
-        workoutBuildError = nil
         let userMessage = KaiMessage(role: .user, content: text)
         messages.append(userMessage)
         streamingReply = ""
@@ -391,8 +410,11 @@ struct CoachView: View {
 
 // MARK: - BuildWorkoutRow
 
-/// The "Build Workout" affordance shown under the conversation — lets the
-/// user turn whatever's been negotiated in chat (exercises added/removed,
+/// The "Build Workout" affordance — rendered directly under the specific
+/// assistant message that proposed a plan (see CoachView.isWorkoutProposal),
+/// so it reads as a small helpful skill tied to that turn rather than a
+/// permanent button parked at the end of the conversation. Lets the user
+/// turn whatever's been negotiated in chat (exercises added/removed,
 /// duration changed) into a real workout on demand, rather than losing that
 /// context to a generic re-roll from the Workout tab's own Generate button.
 private struct BuildWorkoutRow: View {
@@ -497,21 +519,68 @@ private struct MessageBubble: View {
         case listItem(String)
     }
 
+    /// An exercise list line as Kai actually writes it: "Name — 3 sets of 8"
+    /// with an optional trailing "(note)" — see the system prompt's
+    /// formatting rule. Split apart so it can render as a real exercise
+    /// row (name / prescription / note) instead of one run-on sentence.
+    private struct ParsedExerciseLine {
+        let name: String
+        let prescription: String?
+        let note: String?
+    }
+
+    private func parseExerciseLine(_ text: String) -> ParsedExerciseLine {
+        var remaining = text.trimmingCharacters(in: .whitespaces)
+        var note: String?
+
+        if remaining.hasSuffix(")"), let openParen = remaining.lastIndex(of: "(") {
+            note = String(remaining[remaining.index(after: openParen)..<remaining.index(before: remaining.endIndex)])
+            remaining = String(remaining[..<openParen]).trimmingCharacters(in: .whitespaces)
+        }
+
+        guard let dashRange = remaining.range(of: " — ") else {
+            return ParsedExerciseLine(name: remaining, prescription: nil, note: note)
+        }
+
+        let name = String(remaining[..<dashRange.lowerBound])
+        var prescription = String(remaining[dashRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if prescription.hasSuffix(".") { prescription.removeLast() }
+        return ParsedExerciseLine(name: name, prescription: prescription.isEmpty ? nil : prescription, note: note)
+    }
+
     /// Kai's replies are plain text with blank-line paragraph breaks, and a
     /// "- " prefix on any line that's an exercise in a list rather than
-    /// prose (see the system prompt's formatting rule). Rendering list
-    /// items distinctly from prose — instead of every block looking like an
-    /// identical paragraph — is what actually cuts the clutter on a long
-    /// workout rundown.
+    /// prose (see the system prompt's formatting rule). Walks line by line
+    /// rather than block by block: a multi-line list (one exercise per
+    /// line, no blank lines between them) is still one "\n\n" paragraph, so
+    /// checking only the paragraph's own prefix converted just its first
+    /// line to a bullet and left every following "- " line as literal text.
+    /// Consecutive non-list lines are still joined back into one prose
+    /// block, so an ordinary multi-line paragraph reads the same as before.
     private var blocks: [Block] {
-        let split = message.content
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let paragraphs = split.isEmpty ? [message.content] : split
-        return paragraphs.map { text in
-            text.hasPrefix("- ") ? .listItem(String(text.dropFirst(2))) : .prose(text)
+        var result: [Block] = []
+        var proseLines: [String] = []
+
+        func flushProse() {
+            guard !proseLines.isEmpty else { return }
+            result.append(.prose(proseLines.joined(separator: "\n")))
+            proseLines = []
         }
+
+        for rawLine in message.content.components(separatedBy: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("- ") {
+                flushProse()
+                result.append(.listItem(String(line.dropFirst(2))))
+            } else if line.isEmpty {
+                flushProse()
+            } else {
+                proseLines.append(line)
+            }
+        }
+        flushProse()
+
+        return result.isEmpty ? [.prose(message.content)] : result
     }
 
     var body: some View {
@@ -531,16 +600,35 @@ private struct MessageBubble: View {
                                 .lineSpacing(4)
                                 .multilineTextAlignment(.leading)
                         case .listItem(let text):
+                            let exercise = parseExerciseLine(text)
                             HStack(alignment: .top, spacing: 8) {
                                 Circle()
-                                    .fill(textColor.opacity(0.7))
+                                    .fill(Color.fzPrimary)
                                     .frame(width: 5, height: 5)
                                     .padding(.top, 7)
-                                Text(text)
-                                    .font(.fzBody(14))
-                                    .foregroundStyle(textColor)
-                                    .lineSpacing(3)
-                                    .multilineTextAlignment(.leading)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text(exercise.name)
+                                            .font(.fzBody(14, weight: .semibold))
+                                            .foregroundStyle(textColor)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        if let prescription = exercise.prescription {
+                                            Spacer(minLength: 4)
+                                            Text(prescription)
+                                                .font(.fzMono(12, weight: .medium))
+                                                .foregroundStyle(Color.fzPrimary)
+                                                .fixedSize()
+                                        }
+                                    }
+                                    if let note = exercise.note {
+                                        Text(note)
+                                            .font(.fzBody(12))
+                                            .italic()
+                                            .foregroundStyle(textColor.opacity(0.65))
+                                            .multilineTextAlignment(.leading)
+                                    }
+                                }
                             }
                         }
                     }
