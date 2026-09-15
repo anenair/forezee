@@ -143,13 +143,27 @@ enum CoachResponseValidator {
                 }
             }
         case .logSet:
-            // Only when a real session is actually in progress (Coach chat
-            // has no session of its own to log into otherwise), and only
-            // when the model gave a real rep count or explicitly asked to
-            // reuse the previous set — never a bare, numberless action that
-            // would leave WorkoutSessionManager to guess.
-            guard WorkoutSessionManager.shared.isActive else { return false }
-            let hasReps = (action.payload?["reps"]).flatMap(Int.init).map { $0 > 0 } ?? false
+            // Only when a real session is actually in progress AND it
+            // still has a current exercise to log into — `isActive` alone
+            // covers "not started yet" / "already finished," but not the
+            // in-between state where every exercise is already checked
+            // off but the session itself hasn't been finished yet (e.g.
+            // right after logging the last set of the last exercise).
+            // Without this second check, a stale log_set button would
+            // silently no-op on tap (WorkoutSessionManager.logNextSet
+            // returns nil with nothing else for the app to say) instead of
+            // never being offered in the first place. Also requires a real
+            // rep count or an explicit "reuse the previous set" — never a
+            // bare, numberless action that would leave the manager to guess.
+            guard WorkoutSessionManager.shared.isActive,
+                  WorkoutSessionManager.shared.currentExercise != nil else { return false }
+            // Same "never trust a decoded value just because it decoded"
+            // rule as a workout prescription's own reps, reusing the same
+            // maxReps bound — a hallucinated rep count is exactly the kind
+            // of bad-generation signal this pass exists to catch, and
+            // unlike a workout proposal, this one writes straight to real
+            // logged history if let through.
+            let hasReps = (action.payload?["reps"]).flatMap(Int.init).map { $0 > 0 && $0 <= maxReps } ?? false
             let reusesPrevious = action.payload?["sameAsPrevious"] == "true"
             return hasReps || reusesPrevious
         case .startWorkout, .modifyWorkout, .skipExercise,
