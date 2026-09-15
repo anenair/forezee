@@ -328,6 +328,13 @@ struct CoachActionRow: View {
         case .buildWorkout:    return "dumbbell.fill"
         case .replaceExercise: return "arrow.triangle.2.circlepath"
         case .logSet:          return "checkmark.circle.fill"
+        case .startWorkout:    return "play.fill"
+        case .modifyWorkout:   return "minus.circle"
+        case .skipExercise:    return "arrow.uturn.forward"
+        case .startTimer:      return "timer"
+        case .finishWorkout:   return "flag.checkered"
+        case .showExercise:    return "clock.arrow.circlepath"
+        case .viewProgress:    return "chart.bar.fill"
         default:                return "bolt.fill"
         }
     }

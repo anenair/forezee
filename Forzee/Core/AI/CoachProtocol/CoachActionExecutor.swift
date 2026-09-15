@@ -9,29 +9,42 @@
 // button (see CoachActionRow); this is where a permitted action
 // actually happens. Nothing here trusts the LLM further than that
 // one decision already made.
+//
+// Every action that touches the in-progress workout goes through
+// WorkoutSessionManager — the same interface WorkoutTabView's own
+// manual entry and voice mode use — so a set logged, an exercise
+// skipped, or a workout finished from chat is indistinguishable
+// from doing the same thing by hand or by voice. Nothing here
+// duplicates that resolution logic.
 // ============================================================
 
 import Foundation
 
-/// What running an action actually did — a build_workout starts a real
-/// GeneratedWorkout session in WorkoutSessionManager (nothing about the
-/// chat message itself changes); a replace_exercise instead mutates the
-/// SAME message's own workout block, so the caller needs the updated
-/// CoachResponse back to re-store against that message; a log_set writes
-/// a real set into whatever session is active, same as WorkoutTabView's
-/// own manual entry or voice mode would. `.none` covers "not permitted"
-/// and "not implemented" alike — the caller doesn't need to tell those apart.
+/// What running an action actually did. build_workout/start_workout both
+/// start a real session in WorkoutSessionManager (the caller distinguishes
+/// them only by label — the app doesn't care which surface a session came
+/// from); replace_exercise instead mutates the SAME message's own workout
+/// block, so the caller needs the updated CoachResponse back to re-store
+/// against that message. `.none` covers "not permitted" and "not
+/// implemented" alike — the caller doesn't need to tell those apart.
 enum CoachActionOutcome {
     case builtWorkout(GeneratedWorkout)
     case updatedResponse(CoachResponse)
     case loggedSet(LogSetOutcome)
+    case startedWorkout(GeneratedWorkout)
+    case removedExercise(WorkoutExercise)
+    case skippedExercise(WorkoutExercise)
+    case startedTimer(seconds: Int)
+    case finishedWorkout(FinishedSession)
+    case showExercise(name: String)
+    case switchedTab(AppTab)
     case none
 }
 
 @MainActor
 enum CoachActionExecutor {
 
-    static func execute(_ action: CoachAction, from response: CoachResponse) -> CoachActionOutcome {
+    static func execute(_ action: CoachAction, from response: CoachResponse, userId: String) async -> CoachActionOutcome {
         guard CoachResponseValidator.isPermitted(action, in: response.blocks) else { return .none }
 
         switch action.type {
@@ -41,11 +54,22 @@ enum CoachActionExecutor {
             return replaceExercise(action, in: response)
         case .logSet:
             return logSet(action)
-        case .startWorkout, .modifyWorkout, .skipExercise,
-             .startTimer, .finishWorkout, .showExercise, .viewProgress, .unknown:
-            // isPermitted already excludes all of these — unreachable in
-            // practice, kept explicit rather than a `default:` so adding a
-            // new CoachActionType case forces a decision here too.
+        case .startWorkout:
+            return await startWorkout(action, userId: userId)
+        case .modifyWorkout:
+            return modifyWorkout(action)
+        case .skipExercise:
+            return skipExercise()
+        case .startTimer:
+            return startTimer(action)
+        case .finishWorkout:
+            return await finishWorkout(userId: userId)
+        case .showExercise:
+            return showExercise(action)
+        case .viewProgress:
+            return .switchedTab(.progress)
+        case .unknown:
+            // isPermitted already excludes this — unreachable in practice.
             return .none
         }
     }
@@ -129,6 +153,81 @@ enum CoachActionExecutor {
         ) else { return .none }
 
         return .loggedSet(outcome)
+    }
+
+    /// Starts a repeat of a NAMED past workout — the chat equivalent of
+    /// tapping "Repeat This Workout" on a past session's detail view
+    /// (WorkoutDetailView.repeatWorkout), just resolved by name instead of
+    /// the user picking from a list. isPermitted already confirmed no
+    /// session is currently active, so this never silently discards one.
+    /// Searches a wide-enough window of recent sessions (matching
+    /// WorkoutSessionManager.loadPersonalBests' own limit) for the most
+    /// recent one whose workout name contains what the user said.
+    private static func startWorkout(_ action: CoachAction, userId: String) async -> CoachActionOutcome {
+        guard let workoutName = action.payload?["workoutName"] else { return .none }
+
+        guard let sessions = try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 200),
+              let match = sessions.first(where: {
+                  $0.workout?.name.localizedCaseInsensitiveContains(workoutName) == true
+              }),
+              let workoutId = match.workoutId,
+              let workoutUUID = UUID(uuidString: workoutId),
+              let info = match.workout,
+              let exercises = info.exercises else { return .none }
+
+        let workout = GeneratedWorkout(
+            id: workoutUUID,
+            name: info.name,
+            workoutType: info.workoutType,
+            estimatedDurationMins: info.estimatedDurationMins ?? 45,
+            exercises: exercises,
+            generatedAt: info.generatedAt ?? .now
+        )
+        WorkoutSessionManager.shared.start(workout, isRepeat: true)
+        return .startedWorkout(workout)
+    }
+
+    /// Removes a named exercise from the current session — isPermitted
+    /// already confirmed it's actually there.
+    private static func modifyWorkout(_ action: CoachAction) -> CoachActionOutcome {
+        guard let exerciseName = action.payload?["exerciseName"],
+              let exerciseId = WorkoutSessionManager.shared.workout?.exercises.first(where: {
+                  $0.name.caseInsensitiveCompare(exerciseName) == .orderedSame
+              })?.id,
+              let removed = WorkoutSessionManager.shared.removeExercise(exerciseId) else { return .none }
+        return .removedExercise(removed)
+    }
+
+    /// Marks the CURRENT exercise done with no sets behind it — the exact
+    /// same operation as tapping its checkbox while incomplete.
+    private static func skipExercise() -> CoachActionOutcome {
+        guard let exercise = WorkoutSessionManager.shared.skipCurrentExercise() else { return .none }
+        return .skippedExercise(exercise)
+    }
+
+    private static func startTimer(_ action: CoachAction) -> CoachActionOutcome {
+        guard let seconds = (action.payload?["seconds"]).flatMap(Int.init) else { return .none }
+        WorkoutSessionManager.shared.startRestTimer(seconds: seconds)
+        return .startedTimer(seconds: seconds)
+    }
+
+    /// Ends the current session with no feedback captured — the same
+    /// operation as tapping "Skip" on the post-workout feedback sheet
+    /// (SessionFeedbackSheet). Kai doesn't attempt to extract mood/effort/
+    /// notes from the conversation for this v1; that's a real future
+    /// enhancement, not a silent gap in what already exists.
+    private static func finishWorkout(userId: String) async -> CoachActionOutcome {
+        guard let finished = try? await WorkoutSessionManager.shared.finish(userId: userId, feedback: .empty) else {
+            return .none
+        }
+        return .finishedWorkout(finished)
+    }
+
+    /// No session needed — this just names which exercise's history to
+    /// open, the same sheet the clock-icon button opens from WorkoutTabView.
+    private static func showExercise(_ action: CoachAction) -> CoachActionOutcome {
+        guard let exerciseName = action.payload?["exerciseName"] else { return .none }
+        return .showExercise(name: exerciseName)
     }
 
     private static func firstWorkoutBlock(in blocks: [CoachBlock]) -> WorkoutBlock? {

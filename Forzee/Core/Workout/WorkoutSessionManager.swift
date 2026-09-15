@@ -49,6 +49,14 @@ final class WorkoutSessionManager: ObservableObject {
     /// minutes earlier in this same session. See `isPersonalRecord`.
     @Published private(set) var personalBests: [String: InsightsEngine.PersonalBest] = [:]
 
+    /// The rest timer — previously WorkoutTabView's own private @State,
+    /// moved here so Coach chat's start_timer action shows up in the same
+    /// countdown banner the Workout tab already renders, rather than
+    /// starting a timer nobody but chat can see. `restTimerTotalSecs` is
+    /// only meaningful while `restTimerEndDate` is non-nil.
+    @Published private(set) var restTimerEndDate: Date?
+    @Published private(set) var restTimerTotalSecs: Int = 0
+
     var isActive: Bool { workout != nil && !isFinished }
 
     // MARK: - Lifecycle
@@ -116,6 +124,25 @@ final class WorkoutSessionManager: ObservableObject {
         loggedSets = []
         isFinished = false
         personalBests = [:]
+        cancelRestTimer()
+    }
+
+    // MARK: - Rest Timer
+
+    /// Starts (or restarts) the rest timer — called after logging a set,
+    /// same as always, or directly from Coach chat's start_timer action.
+    /// Either way it's the same countdown, visible wherever
+    /// RestTimerBanner is shown.
+    func startRestTimer(seconds: Int) {
+        guard seconds > 0 else { return }
+        restTimerTotalSecs = seconds
+        restTimerEndDate = Date().addingTimeInterval(TimeInterval(seconds))
+        NotificationManager.shared.scheduleRestTimerAlert(seconds: seconds)
+    }
+
+    func cancelRestTimer() {
+        restTimerEndDate = nil
+        NotificationManager.shared.cancelRestTimerAlert()
     }
 
     // MARK: - Exercises
@@ -124,6 +151,34 @@ final class WorkoutSessionManager: ObservableObject {
     /// sheet's only write.
     func addExercise(_ exercise: WorkoutExercise) {
         workout?.exercises.append(exercise)
+    }
+
+    /// Removes an exercise from the workout entirely — distinct from
+    /// completing or skipping it. No manual UI triggers this yet (there's
+    /// no remove gesture in WorkoutTabView today), but it lives here
+    /// rather than ad hoc in the chat action executor so one could be
+    /// added later against this exact same method. Drops any logged sets
+    /// for it too, so a re-added exercise of the same name never inherits
+    /// stale sets.
+    @discardableResult
+    func removeExercise(_ exerciseId: UUID) -> WorkoutExercise? {
+        guard let index = workout?.exercises.firstIndex(where: { $0.id == exerciseId }) else { return nil }
+        let removed = workout!.exercises.remove(at: index)
+        loggedSets.removeAll { $0.exerciseId == exerciseId }
+        completedExerciseIds.remove(exerciseId)
+        return removed
+    }
+
+    /// Marks the CURRENT exercise complete with no sets behind it — the
+    /// same operation the tap-to-complete checkbox already performs when
+    /// tapped on an incomplete exercise (see `toggleExerciseComplete`),
+    /// just resolved contextually instead of needing a specific exercise
+    /// tapped. Nil when every exercise is already complete.
+    @discardableResult
+    func skipCurrentExercise() -> WorkoutExercise? {
+        guard let exercise = currentExercise else { return nil }
+        completedExerciseIds.insert(exercise.id)
+        return exercise
     }
 
     /// The tap-to-complete checkbox, with no per-set detail behind it —

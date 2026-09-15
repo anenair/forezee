@@ -41,6 +41,10 @@ struct CoachView: View {
     @State private var executingActionMessageId: UUID?
     @State private var actionConfirmations: [UUID: String] = [:]
 
+    /// Set by a tapped show_exercise action — presented via the same
+    /// ExerciseHistorySheet the Workout tab's own clock-icon button opens.
+    @State private var historyExerciseName: String?
+
     private static let bottomAnchorId = "bottom"
 
     var body: some View {
@@ -68,7 +72,7 @@ struct CoachView: View {
                                                     action: action,
                                                     isExecuting: executingActionMessageId == message.id,
                                                     confirmation: actionConfirmations[message.id],
-                                                    onTap: { runAction(action, in: response, messageId: message.id) },
+                                                    onTap: { Task { await runAction(action, in: response, messageId: message.id) } },
                                                     onOpenWorkoutTab: { appState.activeTab = .workout }
                                                 )
                                                 .padding(.leading, 34)
@@ -162,6 +166,14 @@ struct CoachView: View {
         .task { await loadBriefing() }
         .task { await loadChatHistory() }
         .onDisappear { stopVoiceMode() }
+        .sheet(isPresented: Binding(
+            get: { historyExerciseName != nil },
+            set: { if !$0 { historyExerciseName = nil } }
+        )) {
+            if let historyExerciseName {
+                ExerciseHistorySheet(userId: appState.userId, exerciseName: historyExerciseName)
+            }
+        }
     }
 
     private func loadChatHistory() async {
@@ -172,19 +184,22 @@ struct CoachView: View {
     // MARK: - Structured Actions
 
     /// Runs a CoachAction the user tapped — CoachActionExecutor (the
-    /// domain layer) has the final say on whether it's actually
-    /// permitted and does the real work. build_workout starts a real
-    /// session in WorkoutSessionManager (no second LLM call — the
-    /// response already carries the full workout block); replace_exercise
-    /// instead mutates that SAME message's own workout block, so this
-    /// re-stores the updated CoachResponse against the message it came
-    /// from and the bubble re-renders with the swap already applied;
-    /// log_set writes a real set into whatever session is already active.
-    private func runAction(_ action: CoachAction, in response: CoachResponse, messageId: UUID) {
+    /// domain layer) has the final say on whether it's actually permitted
+    /// and does the real work, all through WorkoutSessionManager so a set
+    /// logged, an exercise skipped, or a workout finished from chat is
+    /// indistinguishable from doing the same thing by hand or by voice.
+    /// build_workout/start_workout start a real session (no second LLM
+    /// call — the response already carries the full workout block, or
+    /// names a past one to repeat); replace_exercise instead mutates that
+    /// SAME message's own workout block, so this re-stores the updated
+    /// CoachResponse against the message it came from and the bubble
+    /// re-renders with the swap already applied.
+    private func runAction(_ action: CoachAction, in response: CoachResponse, messageId: UUID) async {
+        guard let userId = appState.userId else { return }
         executingActionMessageId = messageId
         defer { executingActionMessageId = nil }
 
-        switch CoachActionExecutor.execute(action, from: response) {
+        switch await CoachActionExecutor.execute(action, from: response, userId: userId) {
         case .builtWorkout(let workout):
             actionConfirmations[messageId] = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
         case .updatedResponse(let updated):
@@ -204,6 +219,21 @@ struct CoachView: View {
             )
         case .loggedSet(let outcome):
             actionConfirmations[messageId] = "Logged set \(outcome.setNumber) for \(outcome.exercise.name)\(loggedSetSummary(outcome))."
+        case .startedWorkout(let workout):
+            actionConfirmations[messageId] = "Started \"\(workout.name)\" (\(workout.exercises.count) exercises) — head to your Workout tab."
+        case .removedExercise(let exercise):
+            actionConfirmations[messageId] = "Removed \(exercise.name) from your workout."
+        case .skippedExercise(let exercise):
+            actionConfirmations[messageId] = "Skipped \(exercise.name)."
+        case .startedTimer(let seconds):
+            actionConfirmations[messageId] = "Resting for \(seconds)s."
+        case .finishedWorkout(let finished):
+            let count = finished.completedExerciseNames.count
+            actionConfirmations[messageId] = "Workout saved — \(count) exercise\(count == 1 ? "" : "s") completed."
+        case .showExercise(let name):
+            historyExerciseName = name
+        case .switchedTab(let tab):
+            appState.activeTab = tab
         case .none:
             break
         }

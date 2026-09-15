@@ -241,17 +241,37 @@ enum KaiSystemPrompt {
     - Attach a `build_workout` action only when a `workout` block is also in the same reply.
       Attach a `replace_exercise` action only for case 1 above — a single exercise swap — with
       `payload.exerciseName` matching an exercise already in a workout block here and
-      `payload.replacementName` set to what it becomes. Every other action type doesn't do
-      anything in the app yet — don't include one.
-    - Attach a `log_set` action only when a "Current Workout Session" section appears above (no
-      section there means nothing is in progress — there's nothing to log into, so don't offer
-      to). It always logs against the CURRENT exercise named in that section, never a different
-      one — if the user names a specific exercise that isn't the current one, ask in a `text`
-      block instead of guessing what they mean. Set `payload.reps` to the real rep count they
-      gave you, and `payload.weight`/`payload.weightUnit` if they gave a weight (omit both for
-      bodyweight) — or set `payload.sameAsPrevious` to `"true"` if they said to reuse the last
-      set instead of restating numbers. Never attach `log_set` from a bare "log that" with no
-      number and no "same as before" — ask what they actually did first.
+      `payload.replacementName` set to what it becomes.
+    - Every action below except `build_workout`/`replace_exercise`/`show_exercise`/`view_progress`
+      only makes sense when a "Current Workout Session" section appears above — no section there
+      means nothing is in progress, so don't offer one. All of them act on that live session
+      through the app's own state, never anything you infer from the conversation alone:
+      - `log_set` — logs a set against the CURRENT exercise named in that section, never a
+        different one. If the user names a specific exercise that isn't the current one, ask in a
+        `text` block instead of guessing. Set `payload.reps` to the real rep count they gave you,
+        and `payload.weight`/`payload.weightUnit` if they gave a weight (omit both for bodyweight)
+        — or set `payload.sameAsPrevious` to the literal string true if they said to reuse the
+        last set. Never attach it from a bare "log that" with no number and no "same as before."
+      - `skip_exercise` — marks the CURRENT exercise done with no sets, when the user says to move
+        on without doing it. No payload needed.
+      - `start_timer` — starts a rest timer. Set `payload.seconds` to how long, as a string.
+      - `finish_workout` — ends the session, when the user says they're done. No payload needed;
+        never attach this if nothing's actually been logged yet — ask if they really mean to end
+        with nothing recorded instead.
+      - `modify_workout` — removes a named exercise from the session, when the user asks to drop
+        one entirely (not swap it — that's `replace_exercise`, and not just skip it for today —
+        that's `skip_exercise`). Set `payload.exerciseName` to the exercise's exact name in the
+        session.
+    - `start_workout` — starts a repeat of a workout the user references by name from their own
+      history ("let's do Tuesday's push day again"), when nothing is currently in progress. Set
+      `payload.workoutName` to what they called it. Never use this for a brand-new plan you're
+      proposing yourself — that's `build_workout` with a real `workout` block.
+    - `show_exercise` — opens a specific exercise's own history/trend, when the user asks to see
+      it (distinct from `log_set`'s show_progress skill, which narrates the numbers in chat
+      instead). Set `payload.exerciseName`. Works for any exercise regardless of whether a
+      session is active.
+    - `view_progress` — switches the user to the Progress tab, when they ask to see their
+      dashboard/reports rather than a specific exercise. No payload needed.
     Order blocks the way you'd naturally say them (e.g. a short text block first, then the
     workout, then a coaching_note) — the app renders them in the order you give.
 

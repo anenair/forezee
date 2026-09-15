@@ -47,12 +47,6 @@ struct WorkoutTabView: View {
     @State private var showAddExercise = false
     @State private var historyExercise: WorkoutExercise?
 
-    // Rest timer — foreground countdown lives here; the background half
-    // (a local notification if the app gets backgrounded mid-rest) is
-    // NotificationManager.scheduleRestTimerAlert.
-    @State private var restTimerEndDate: Date?
-    @State private var restTimerTotalSecs: Int = 0
-
     // PR announcement — a transient toast. The PR *check* itself lives in
     // WorkoutSessionManager (isPersonalRecord), against the same frozen
     // personalBests baseline it loads; this is only the "show it, then
@@ -75,12 +69,12 @@ struct WorkoutTabView: View {
 
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
-                        if let restTimerEndDate {
+                        if let restTimerEndDate = sessionManager.restTimerEndDate {
                             RestTimerBanner(
                                 endDate: restTimerEndDate,
-                                totalSecs: restTimerTotalSecs,
-                                onDone: { self.restTimerEndDate = nil },
-                                onSkip: cancelRestTimer
+                                totalSecs: sessionManager.restTimerTotalSecs,
+                                onDone: { sessionManager.cancelRestTimer() },
+                                onSkip: { sessionManager.cancelRestTimer() }
                             )
                         }
 
@@ -319,7 +313,7 @@ struct WorkoutTabView: View {
         if let weightValue = outcome.weightValue, let weightUnit = outcome.weightUnit, let reps = outcome.reps {
             checkForPR(exerciseName: outcome.exercise.name, weight: weightValue, unit: weightUnit, reps: reps)
         }
-        startRestTimer(seconds: outcome.restSecs ?? outcome.exercise.restSecs)
+        sessionManager.startRestTimer(seconds: outcome.restSecs ?? outcome.exercise.restSecs)
 
         speak(result.spokenReply.isEmpty ? "Set \(outcome.setNumber) logged for \(outcome.exercise.name)." : result.spokenReply)
     }
@@ -478,7 +472,7 @@ struct WorkoutTabView: View {
         if let weight, let reps {
             checkForPR(exerciseName: exercise.name, weight: weight, unit: unit, reps: reps)
         }
-        startRestTimer(seconds: restSecs ?? exercise.restSecs)
+        sessionManager.startRestTimer(seconds: restSecs ?? exercise.restSecs)
     }
 
     private func removeSet(exercise: WorkoutExercise, setNumber: Int) {
@@ -489,20 +483,6 @@ struct WorkoutTabView: View {
 
     private func addExercise(_ exercise: WorkoutExercise) {
         sessionManager.addExercise(exercise)
-    }
-
-    // MARK: - Rest Timer
-
-    private func startRestTimer(seconds: Int) {
-        guard seconds > 0 else { return }
-        restTimerTotalSecs = seconds
-        restTimerEndDate = Date().addingTimeInterval(TimeInterval(seconds))
-        NotificationManager.shared.scheduleRestTimerAlert(seconds: seconds)
-    }
-
-    private func cancelRestTimer() {
-        restTimerEndDate = nil
-        NotificationManager.shared.cancelRestTimerAlert()
     }
 
     // MARK: - PR Detection
@@ -601,13 +581,12 @@ struct WorkoutTabView: View {
     }
 
     private func reset() {
-        sessionManager.discard()
+        sessionManager.discard() // also cancels the rest timer
         companionComment = nil
         report = nil
         errorMessage = nil
         prAnnouncement = nil
         syncedWorkoutId = nil
-        cancelRestTimer()
     }
 }
 
