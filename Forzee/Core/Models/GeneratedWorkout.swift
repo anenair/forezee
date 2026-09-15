@@ -96,11 +96,25 @@ struct WorkoutExercise: Identifiable, Codable {
     var notes: String?        // Form cues, modifications, Kai's advice for this exercise
 
     // Phase 3 "Insights" plumbing — Kai tags these at generation time
-    // (WorkoutGenerationPrompt) or extraction time (extract_workout skill).
+    // (WorkoutGenerationPrompt), or WorkoutBuilder resolves them from
+    // ExerciseCatalog for a workout built via the Coach chat protocol.
     // Optional and additive: older stored workouts simply decode nil here,
     // same pattern as restSecs below.
     var primaryMuscleGroup: MuscleGroup?
     var secondaryMuscleGroups: [MuscleGroup]
+
+    /// The rich, discriminated-union prescription this exercise came from,
+    /// when it was built via the Coach chat protocol (see
+    /// Core/AI/CoachProtocol/WorkoutBuilder.swift) — nil for anything from
+    /// the older sets/reps/restSecs-only generation path (WorkoutGenerationPrompt),
+    /// which still populates those flat fields directly and doesn't need
+    /// this. Additive and optional so every existing stored workout simply
+    /// decodes nil here, same pattern as primaryMuscleGroup above. Not the
+    /// source of truth for sets/reps/restSecs above — those are always kept
+    /// in sync at construction time (see WorkoutBuilder) so WorkoutTabView's
+    /// per-set editor, built entirely around the flat fields, never needs
+    /// to know this exists.
+    var prescription: ExercisePrescription?
 
     init(
         id: UUID = UUID(),
@@ -112,7 +126,8 @@ struct WorkoutExercise: Identifiable, Codable {
         restSecs: Int = 90,
         notes: String? = nil,
         primaryMuscleGroup: MuscleGroup? = nil,
-        secondaryMuscleGroups: [MuscleGroup] = []
+        secondaryMuscleGroups: [MuscleGroup] = [],
+        prescription: ExercisePrescription? = nil
     ) {
         self.id = id
         self.exerciseId = exerciseId
@@ -124,20 +139,22 @@ struct WorkoutExercise: Identifiable, Codable {
         self.notes = notes
         self.primaryMuscleGroup = primaryMuscleGroup
         self.secondaryMuscleGroups = secondaryMuscleGroups
+        self.prescription = prescription
     }
 
     // MARK: - Decodable
     //
     // Same reasoning as GeneratedWorkout above — Claude's exercise JSON never
     // includes "id", so it needs a fresh UUID rather than a required field.
-    // primaryMuscleGroup/secondaryMuscleGroups are similarly forgiving: an
-    // unrecognized or missing tag decodes to nil/empty rather than failing
-    // the whole exercise, since Claude occasionally free-names a muscle
-    // group not in MuscleGroup's fixed list.
+    // primaryMuscleGroup/secondaryMuscleGroups/prescription are similarly
+    // forgiving: an unrecognized or missing value decodes to nil/empty
+    // rather than failing the whole exercise, since Claude occasionally
+    // free-names a muscle group not in MuscleGroup's fixed list, and older
+    // stored workouts never had a prescription field at all.
 
     enum CodingKeys: String, CodingKey {
         case id, exerciseId, name, sets, reps, weightKg, restSecs, notes
-        case primaryMuscleGroup, secondaryMuscleGroups
+        case primaryMuscleGroup, secondaryMuscleGroups, prescription
     }
 
     init(from decoder: Decoder) throws {
@@ -152,6 +169,7 @@ struct WorkoutExercise: Identifiable, Codable {
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         primaryMuscleGroup = (try? container.decodeIfPresent(MuscleGroup.self, forKey: .primaryMuscleGroup)) ?? nil
         secondaryMuscleGroups = (try? container.decodeIfPresent([MuscleGroup].self, forKey: .secondaryMuscleGroups)) ?? nil ?? []
+        prescription = (try? container.decodeIfPresent(ExercisePrescription.self, forKey: .prescription)) ?? nil
     }
 }
 

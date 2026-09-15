@@ -2,11 +2,12 @@
 // MuscleGroup.swift
 // Forzee — Core/Models
 //
-// The canonical muscle-group vocabulary Kai tags exercises with
-// at generation time (see WorkoutGenerationPrompt, extract_workout
-// skill) — the plumbing roadmap Phase 3 "Insights" is built on top
-// of: Weekly Set Targets, Recovery, and Kai's weekly read all read
-// this same tag rather than each inventing their own grouping.
+// The canonical muscle-group vocabulary Kai tags exercises with at
+// generation time (see WorkoutGenerationPrompt, or CoachProtocol's
+// ExerciseCatalog for the Coach chat path) — the plumbing roadmap
+// Phase 3 "Insights" is built on top of: Weekly Set Targets, Recovery,
+// and Kai's weekly read all read this same tag rather than each
+// inventing their own grouping.
 // ============================================================
 
 import Foundation

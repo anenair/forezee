@@ -152,6 +152,69 @@ enum InsightsEngine {
         Calendar.current.dateInterval(of: .year, for: date)?.start ?? date
     }
 
+    // MARK: - Personal Bests
+
+    /// Heaviest weight×reps ever logged for an exercise name, kept as a
+    /// frozen snapshot rather than something that recomputes live — see
+    /// WorkoutTabView's PR-detection banner, which loads this once when a
+    /// workout starts specifically so a set only ever competes against
+    /// what was already true walking in.
+    struct PersonalBest {
+        let weightKg: Double
+        let reps: Int
+    }
+
+    static func personalBests(sessions: [SessionHistoryEntry]) -> [String: PersonalBest] {
+        var bests: [String: PersonalBest] = [:]
+        for session in sessions {
+            for set in session.setsLog {
+                guard let name = set.exerciseName, let weightKg = set.weightKg, let reps = set.reps,
+                      weightKg > 0, reps > 0 else { continue }
+                let current = bests[name]
+                if current == nil || weightKg > current!.weightKg || (weightKg == current!.weightKg && reps > current!.reps) {
+                    bests[name] = PersonalBest(weightKg: weightKg, reps: reps)
+                }
+            }
+        }
+        return bests
+    }
+
+    // MARK: - Exercise Progress
+
+    /// The top logged weight for `exerciseName` in its most recent session
+    /// vs. the session before that (only among sessions that actually
+    /// touched this exercise — sessions where it wasn't done don't count
+    /// as "no progress," they're just not in this comparison at all).
+    /// `previous` is nil the first time an exercise has ever been logged —
+    /// there's nothing to compare against yet, not a zero.
+    ///
+    /// Powers Kai's `show_progress` skill (see KaiEngine.sendCoachMessage)
+    /// — the numbers here are real, computed from actual logged sets, and
+    /// are what the app hands Kai to report rather than anything the model
+    /// could invent on its own (matches the system prompt's "never
+    /// fabricate health data" rule).
+    struct ExerciseProgress {
+        let current: Double
+        let previous: Double?
+    }
+
+    static func exerciseProgress(sessions: [SessionHistoryEntry], exerciseName: String) -> ExerciseProgress? {
+        let matching = sessions
+            .compactMap { session -> (date: Date, topWeightKg: Double)? in
+                let topWeight = session.setsLog
+                    .filter { $0.exerciseName?.caseInsensitiveCompare(exerciseName) == .orderedSame }
+                    .compactMap(\.weightKg)
+                    .max()
+                guard let topWeight, topWeight > 0 else { return nil }
+                return (session.startedAt, topWeight)
+            }
+            .sorted { $0.date > $1.date } // newest first
+
+        guard let latest = matching.first else { return nil }
+        let previous = matching.dropFirst().first?.topWeightKg
+        return ExerciseProgress(current: latest.topWeightKg, previous: previous)
+    }
+
     // MARK: - Private
 
     /// A session's sets_log only carries exercise_name (see LoggedSetRecord

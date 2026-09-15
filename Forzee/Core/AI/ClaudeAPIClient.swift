@@ -150,6 +150,126 @@ final class ClaudeAPIClient {
         return try parseToolUseResponse(data, toolName: tool.name)
     }
 
+    /// Forces a single named tool while still sending full conversation
+    /// history and system prompt — completeWithTool's flattened
+    /// single-message form can't carry multi-turn context; completeWithTools
+    /// carries context but leaves the choice to Claude (tool_choice: auto).
+    /// This is the "always structured, but with real conversation context"
+    /// combination the main Coach chat reply needs (see
+    /// KaiEngine.sendCoachMessage / CoachResponse.tool).
+    func completeWithForcedTool(
+        model: KaiModel,
+        systemPrompt: String,
+        messages: [KaiMessage],
+        tool: ClaudeTool,
+        maxTokens: Int = 1536
+    ) async throws -> [String: Any] {
+        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
+            throw ClaudeAPIError.apiKeyNotConfigured
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "max_tokens": maxTokens,
+            "system": systemPrompt,
+            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
+            "tool_choice": ["type": "tool", "name": tool.name],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeAPIError.invalidResponse
+        }
+        try validateStatusCode(httpResponse.statusCode)
+
+        return try parseToolUseResponse(data, toolName: tool.name)
+    }
+
+    /// Same as completeWithForcedTool, but streamed — Claude's Messages
+    /// API streams a forced tool call's JSON arguments incrementally too,
+    /// exactly the same SSE mechanism as plain text (`streamCompletion`
+    /// above): a series of `content_block_delta` events, just carrying
+    /// `input_json_delta`/`partial_json` fragments instead of
+    /// `text_delta`/`text`. `onPartialJSON` gets the full accumulated (but
+    /// not-yet-valid) JSON text after every fragment — see
+    /// IncrementalCoachTextExtractor for how a caller turns that into
+    /// something actually displayable before the object is complete.
+    func streamCompletionWithForcedTool(
+        model: KaiModel,
+        systemPrompt: String,
+        messages: [KaiMessage],
+        tool: ClaudeTool,
+        maxTokens: Int = 1536,
+        onPartialJSON: @escaping (String) -> Void
+    ) async throws -> [String: Any] {
+        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
+            throw ClaudeAPIError.apiKeyNotConfigured
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "max_tokens": maxTokens,
+            "stream": true,
+            "system": systemPrompt,
+            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
+            "tool_choice": ["type": "tool", "name": tool.name],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (asyncBytes, response) = try await urlSession.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeAPIError.invalidResponse
+        }
+        try validateStatusCode(httpResponse.statusCode)
+
+        var accumulatedJSON = ""
+        for try await line in asyncBytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let json = String(line.dropFirst(6))
+            guard json != "[DONE]" else { break }
+
+            if let fragment = parseInputJSONDelta(json) {
+                accumulatedJSON += fragment
+                await MainActor.run { onPartialJSON(accumulatedJSON) }
+            }
+        }
+
+        guard let data = accumulatedJSON.data(using: .utf8),
+              let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ClaudeAPIError.malformedResponse
+        }
+        return input
+    }
+
+    private func parseInputJSONDelta(_ json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = obj["type"] as? String,
+              type == "content_block_delta",
+              let delta = obj["delta"] as? [String: Any],
+              let deltaType = delta["type"] as? String,
+              deltaType == "input_json_delta",
+              let partialJSON = delta["partial_json"] as? String else {
+            return nil
+        }
+        return partialJSON
+    }
+
     // MARK: - Tool Use (model-driven skill discovery)
 
     /// Hands Claude every candidate tool at once with `tool_choice: auto`
