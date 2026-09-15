@@ -667,8 +667,29 @@ final class KaiEngine: ObservableObject {
         // Keep only last 5 messages from history + the new user message
         // Full conversation history is never sent — only the rolling summary
         // embedded in the context snapshot. Token budget: <2,000 input tokens.
-        let recentHistory = Array(history.suffix(5))
+        let recentHistory = Array(history.suffix(5)).map(Self.conversationalCopy)
         return recentHistory + [KaiMessage(role: .user, content: userMessage)]
+    }
+
+    /// An assistant turn's stored `content` is the full encoded CoachResponse
+    /// protocol JSON (see CoachView's `messages.append(reply)`) — the UI
+    /// needs that verbatim to re-render blocks/actions on screen, but it's
+    /// never what should go back to Claude as its OWN prior turn: sending
+    /// raw protocol JSON as conversation history shows the model a garbled
+    /// version of what it "said" instead of what a person actually saw,
+    /// and the pollution compounds with every additional turn in a
+    /// conversation — the likely cause of replies getting more fragile
+    /// (and eventually failing to parse) the longer a chat runs. Swaps an
+    /// assistant message's content for its plain-language summary before
+    /// it's ever sent as history; a user message, or an old plain-text
+    /// message from before this protocol existed, passes through
+    /// unchanged (CoachResponse.parse(legacyContent:)'s fallback already
+    /// makes a single TextBlock's plainTextSummary equal to the original text).
+    private static func conversationalCopy(_ message: KaiMessage) -> KaiMessage {
+        guard message.role == .assistant else { return message }
+        let summary = CoachResponse.parse(legacyContent: message.content).plainTextSummary
+        guard !summary.isEmpty else { return message }
+        return KaiMessage(id: message.id, role: message.role, content: summary, createdAt: message.createdAt)
     }
 }
 
