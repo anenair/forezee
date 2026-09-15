@@ -83,65 +83,10 @@ final class KaiEngine: ObservableObject {
         )
     }
 
-    /// The Coach tab's actual entry point — tries model-driven skill
-    /// discovery first (adjust_plan_from_chat, recovery_check) and only
-    /// falls back to a normal streamed reply when neither applies. Both
-    /// candidate skills need nothing beyond what's already in the system
-    /// prompt's context snapshot (the user's current plan, recent sleep/
-    /// HRV/calendar) — no separate data-fetch per skill.
-    ///
-    /// Cost: one extra Haiku round trip before every message that doesn't
-    /// match a skill (the common case), on top of the existing chat call.
-    /// Accepted trade-off for real "Kai discovers what applies" routing on
-    /// the app's primary AI surface, rather than a classifier guessing
-    /// intent before Claude ever sees the message.
-    func chatWithSkills(
-        message: String,
-        userId: String,
-        history: [KaiMessage],
-        onToken: @escaping (String) -> Void,
-        onComplete: @escaping (KaiMessage) -> Void
-    ) async throws {
-        try await usageGate.checkLimit(userId: userId, taskType: .chatMessage)
-        let context = await contextBuilder.buildSnapshot(userId: userId)
-
-        isResponding = true
-        defer { isResponding = false }
-
-        let candidates = ["adjust_plan_from_chat", "recovery_check"].compactMap(SkillLoader.shared.skill(named:))
-
-        if !candidates.isEmpty {
-            let dispatch = try? await discoverAndRunSkill(
-                message: message,
-                userId: userId,
-                history: history,
-                candidateSkills: candidates,
-                systemPrompt: KaiSystemPrompt.build(context: context)
-            )
-
-            if case .matched(let skill, let input) = dispatch {
-                try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
-
-                let replyText = handleChatSkillReply(skill, input: input)
-                if skill.name == "adjust_plan_from_chat" {
-                    try? await applyPlanAdjustment(input, userId: userId)
-                }
-
-                let responseMessage = KaiMessage(role: .assistant, content: replyText)
-                try? await ForzeeDataService.shared.saveMessage(responseMessage, userId: userId)
-                onComplete(responseMessage)
-                return
-            }
-        }
-
-        try await performChatCompletion(
-            message: message, userId: userId, history: history, context: context,
-            onToken: onToken, onComplete: onComplete
-        )
-    }
-
-    /// Shared by chat() and chatWithSkills() once both have decided a
-    /// normal streamed reply (not a matched skill) is the right response.
+    /// The plain streamed-text completion path — used by chat() (mid-workout
+    /// voice escalation, gym companion, etc.), which never needs the
+    /// structured CoachResponse protocol. Coach chat's own text uses
+    /// sendCoachMessage's forced-tool path instead; see that method.
     private func performChatCompletion(
         message: String,
         userId: String,
@@ -176,6 +121,90 @@ final class KaiEngine: ObservableObject {
         let responseMessage = KaiMessage(role: .assistant, content: fullResponse)
         try? await ForzeeDataService.shared.saveMessage(responseMessage, userId: userId)
         onComplete(responseMessage)
+    }
+
+    /// The Coach tab's structured reply path (see Core/AI/CoachProtocol) —
+    /// every turn comes back as a CoachResponse via a forced tool call,
+    /// never free-form prose. Skill discovery (adjust_plan_from_chat/
+    /// recovery_check) still runs first — a matched skill's plain-text
+    /// reply is wrapped as a single TextBlock so it flows through the
+    /// same rendering and persistence path as everything else, rather
+    /// than needing its own special case.
+    ///
+    /// Runs schema validation (the Codable decode inside
+    /// CoachResponse.from(toolInput:)) and then domain validation
+    /// (CoachResponseValidator.sanitize) before ever returning — a
+    /// response that fails either becomes a graceful fallback text
+    /// reply, never a crash or a nonsensical block reaching the UI.
+    ///
+    /// Trade-off accepted deliberately: this is NOT streamed. A forced
+    /// tool call's arguments arrive as one JSON blob, not prose Claude is
+    /// composing live — there's no meaningful "token so far" to show
+    /// mid-generation the way chat()'s plain-text streaming can. CoachView
+    /// shows its thinking indicator for the whole wait instead of a live
+    /// typewriter effect.
+    func sendCoachMessage(
+        message: String,
+        userId: String,
+        history: [KaiMessage]
+    ) async throws -> CoachResponse {
+        try await usageGate.checkLimit(userId: userId, taskType: .chatMessage)
+        let context = await contextBuilder.buildSnapshot(userId: userId)
+
+        isResponding = true
+        defer { isResponding = false }
+
+        try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
+
+        let candidates = ["adjust_plan_from_chat", "recovery_check"].compactMap(SkillLoader.shared.skill(named:))
+        if !candidates.isEmpty,
+           let dispatch = try? await discoverAndRunSkill(
+                message: message, userId: userId, history: history,
+                candidateSkills: candidates, systemPrompt: KaiSystemPrompt.build(context: context)
+           ),
+           case .matched(let skill, let input) = dispatch {
+            let replyText = handleChatSkillReply(skill, input: input)
+            if skill.name == "adjust_plan_from_chat" {
+                try? await applyPlanAdjustment(input, userId: userId)
+            }
+            let response = CoachResponse(blocks: [.text(TextBlock(content: replyText))])
+            try? await ForzeeDataService.shared.saveMessage(
+                KaiMessage(role: .assistant, content: response.encodedContent()), userId: userId
+            )
+            return response
+        }
+
+        let model = taskClassifier.classify(message: message, context: context)
+        let messages = assembleMessages(userMessage: message, history: history, context: context)
+
+        let response: CoachResponse
+        do {
+            let toolInput = try await apiClient.completeWithForcedTool(
+                model: model,
+                systemPrompt: KaiSystemPrompt.build(context: context),
+                messages: messages,
+                tool: CoachResponse.tool
+            )
+            let decoded = try CoachResponse.from(toolInput: toolInput)
+            response = CoachResponseValidator.sanitize(decoded)
+        } catch {
+            // Schema validation (decode) or the network call itself
+            // failed — never surface that as a broken chat bubble.
+            response = CoachResponse(blocks: [.text(TextBlock(
+                content: "I had trouble putting that together — try asking again."
+            ))])
+        }
+
+        await usageGate.recordUsage(
+            userId: userId, taskType: .chatMessage, model: model,
+            inputTokens: messages.estimatedTokenCount,
+            outputTokens: response.plainTextSummary.estimatedTokenCount
+        )
+
+        try? await ForzeeDataService.shared.saveMessage(
+            KaiMessage(role: .assistant, content: response.encodedContent()), userId: userId
+        )
+        return response
     }
 
     // MARK: - Chat Skill Handling
@@ -365,66 +394,6 @@ final class KaiEngine: ObservableObject {
             userId: userId
         )
         return WorkoutVoiceCommandResult(from: input)
-    }
-
-    /// Extracts a structured workout from a chat conversation — the "Build
-    /// Workout" button in Coach chat. Returns nil if the conversation
-    /// genuinely doesn't contain a plan yet — either because Kai's own
-    /// found_plan field says so, or because Claude didn't reach for the
-    /// extract_workout skill at all (discoverAndRunSkill's "may decline"
-    /// case, which is exactly what a vague/no-plan conversation should
-    /// produce). Throws if the model reported finding one but its
-    /// structured output didn't decode — a distinct case from "no plan,"
-    /// surfaced to the user as such rather than the misleading "ask Kai to
-    /// lay it out."
-    func extractWorkoutFromChat(userId: String, history: [KaiMessage]) async throws -> GeneratedWorkout? {
-        guard let skill = SkillLoader.shared.skill(named: "extract_workout") else {
-            throw WorkoutExtractionError.incompletePlan
-        }
-
-        // Only the last N turns matter here — this extracts the latest
-        // agreed plan, not the full history a chat call would need for
-        // tone/context. Rendered through the skill's own template (its
-        // {{transcript}} placeholder) rather than left for
-        // discoverAndRunSkill to fill, since with a single candidate skill
-        // there's no ambiguity about which template governs the message —
-        // that ambiguity is exactly what multi-skill call sites can't do
-        // this rendering step for, which is why discoverAndRunSkill itself
-        // sends the raw conversation rather than a pre-filled template.
-        let transcript = history.suffix(20)
-            .map { "\($0.role == .user ? "User" : "Kai"): \($0.content)" }
-            .joined(separator: "\n")
-        let prompt = skill.renderedPrompt(placeholders: ["transcript": transcript])
-
-        let dispatch = try await discoverAndRunSkill(
-            message: prompt,
-            userId: userId,
-            history: [],
-            candidateSkills: [skill]
-        )
-
-        guard case .matched(_, let input) = dispatch else { return nil }
-        guard input["found_plan"] as? Bool == true else { return nil }
-
-        guard let data = try? JSONSerialization.data(withJSONObject: input) else {
-            throw WorkoutExtractionError.incompletePlan
-        }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let decoded = try? decoder.decode(GeneratedWorkout.self, from: data) else {
-            throw WorkoutExtractionError.incompletePlan
-        }
-
-        let context = await contextBuilder.buildSnapshot(userId: userId)
-        return GeneratedWorkout(
-            id: decoded.id,
-            name: decoded.name,
-            workoutType: decoded.workoutType,
-            estimatedDurationMins: decoded.estimatedDurationMins,
-            coachingNote: decoded.coachingNote,
-            exercises: decoded.exercises,
-            contextSnapshot: context
-        )
     }
 
     /// Kai's weekly read — the named premium differentiator for the

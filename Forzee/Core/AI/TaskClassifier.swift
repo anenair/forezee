@@ -87,11 +87,14 @@ enum KaiTaskType: String, Codable {
     case dailyBriefing       = "daily_briefing"
     case gymCompanionComment = "gym_companion_comment"
 
-    // workout_voice_command, workout_extraction, recovery_advice, and
-    // insight_generation used to be cases here — all four now run through
-    // the generic skills framework (KaiEngine.run(skill:) / discoverAndRunSkill:
-    // workout_voice_command, extract_workout, recovery_check, explain_insight)
-    // and are tracked under their bundled skill's own name string instead
-    // (see Resources/Skills/, UsageGate.recordUsage(taskType: String, ...)).
-    // A new skill needs nothing added to this enum to be tracked.
+    // workout_voice_command, recovery_advice, and insight_generation used
+    // to be cases here — all now run through the generic skills framework
+    // (KaiEngine.run(skill:) / discoverAndRunSkill: workout_voice_command,
+    // recovery_check, explain_insight) and are tracked under their bundled
+    // skill's own name string instead (see Resources/Skills/,
+    // UsageGate.recordUsage(taskType: String, ...)). A new skill needs
+    // nothing added to this enum to be tracked. ("workout_extraction" was
+    // a fourth such skill, extract_workout — removed along with the chat
+    // extraction method it backed once Coach chat moved to the typed
+    // CoachResponse protocol, see Core/AI/CoachProtocol.)
 }
