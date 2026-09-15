@@ -78,9 +78,17 @@ struct PlateCalculatorSheet: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onChange(of: unit) { _, newUnit in
-            // Reset the bar weight to the new unit's standard barbell rather
-            // than leaving e.g. "45" sitting there relabeled as kg.
+        .onChange(of: unit) { oldUnit, newUnit in
+            // Target weight is a real value the user typed — it has to
+            // convert, not just get relabeled (225 staying "225" after
+            // toggling lb -> kg would silently become a different weight).
+            if let target = Double(targetText) {
+                let kg = oldUnit == .kg ? target : target * 0.45359237
+                targetText = formattedPlate(newUnit == .kg ? kg : kg / 0.45359237)
+            }
+            // The bar, by contrast, resets to the new unit's own standard
+            // barbell rather than converting — there's no "standard target
+            // weight" to fall back on the way there's a standard bar.
             barText = newUnit == .kg ? "20" : "45"
         }
     }

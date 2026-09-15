@@ -47,7 +47,21 @@ struct WorkoutTabView: View {
     @State private var errorMessage: String?
     @State private var showEmptySessionGuard = false
     @State private var showPlateCalculator = false
+    @State private var showAddExercise = false
     @State private var historyExercise: WorkoutExercise?
+
+    // Rest timer — foreground countdown lives here; the background half
+    // (a local notification if the app gets backgrounded mid-rest) is
+    // NotificationManager.scheduleRestTimerAlert.
+    @State private var restTimerEndDate: Date?
+    @State private var restTimerTotalSecs: Int = 0
+
+    // PR detection — a frozen pre-session baseline (loaded once when the
+    // workout becomes active), so a set only ever competes against what
+    // was true walking in, never against something logged minutes ago in
+    // the same session.
+    @State private var personalBests: [String: PersonalBest] = [:]
+    @State private var prAnnouncement: String?
 
     var body: some View {
         NavigationStack {
@@ -56,6 +70,15 @@ struct WorkoutTabView: View {
 
                 ScrollView {
                     VStack(spacing: ForzeeSpacing.sectionGap) {
+                        if let restTimerEndDate {
+                            RestTimerBanner(
+                                endDate: restTimerEndDate,
+                                totalSecs: restTimerTotalSecs,
+                                onDone: { self.restTimerEndDate = nil },
+                                onSkip: cancelRestTimer
+                            )
+                        }
+
                         if let workout {
                             workoutCard(workout)
                         } else {
@@ -103,6 +126,9 @@ struct WorkoutTabView: View {
         .sheet(isPresented: $showPlateCalculator) {
             PlateCalculatorSheet()
         }
+        .sheet(isPresented: $showAddExercise) {
+            AddExerciseSheet(onAdd: addExercise)
+        }
         .sheet(item: $historyExercise) { exercise in
             ExerciseHistorySheet(userId: appState.userId, exerciseName: exercise.name)
         }
@@ -123,6 +149,7 @@ struct WorkoutTabView: View {
                 loggedSets = []
                 companionComment = nil
                 report = nil
+                loadPersonalBests()
             }
         }
     }
@@ -355,6 +382,11 @@ struct WorkoutTabView: View {
             fetchCompanionComment(for: exercise)
         }
 
+        if let weightValue, let weightUnit, let reps {
+            checkForPR(exerciseName: exercise.name, weight: weightValue, unit: weightUnit, reps: reps)
+        }
+        startRestTimer(seconds: exercise.restSecs)
+
         speak(result.spokenReply.isEmpty ? "Set \(setNumber) logged for \(exercise.name)." : result.spokenReply)
     }
 
@@ -421,6 +453,20 @@ struct WorkoutTabView: View {
                         onShowHistory: { historyExercise = exercise }
                     )
                 }
+
+                if !didSaveSession {
+                    ForzeeTextButton(title: "+ Add Exercise", action: { showAddExercise = true })
+                }
+            }
+
+            if let prAnnouncement {
+                HStack(spacing: 6) {
+                    Image(systemName: "trophy.fill").foregroundStyle(Color.fzPrimary)
+                    Text(prAnnouncement)
+                        .font(.fzBody(13, weight: .semibold))
+                        .foregroundStyle(Color.fzPrimary)
+                }
+                .transition(.opacity)
             }
 
             if let companionComment {
@@ -514,11 +560,86 @@ struct WorkoutTabView: View {
             completedExerciseIds.insert(exercise.id)
             fetchCompanionComment(for: exercise)
         }
+
+        if let weight, let reps {
+            checkForPR(exerciseName: exercise.name, weight: weight, unit: unit, reps: reps)
+        }
+        startRestTimer(seconds: restSecs ?? exercise.restSecs)
     }
 
     private func removeSet(exercise: WorkoutExercise, setNumber: Int) {
         loggedSets.removeAll { $0.exerciseId == exercise.id && $0.setNumber == setNumber }
         completedExerciseIds.remove(exercise.id)
+    }
+
+    // MARK: - Add Exercise
+
+    private func addExercise(_ exercise: WorkoutExercise) {
+        workout?.exercises.append(exercise)
+        appState.activeWorkout?.exercises.append(exercise)
+    }
+
+    // MARK: - Rest Timer
+
+    private func startRestTimer(seconds: Int) {
+        guard seconds > 0 else { return }
+        restTimerTotalSecs = seconds
+        restTimerEndDate = Date().addingTimeInterval(TimeInterval(seconds))
+        NotificationManager.shared.scheduleRestTimerAlert(seconds: seconds)
+    }
+
+    private func cancelRestTimer() {
+        restTimerEndDate = nil
+        NotificationManager.shared.cancelRestTimerAlert()
+    }
+
+    // MARK: - PR Detection
+
+    /// Compares a freshly logged set against `personalBests` — a frozen
+    /// snapshot loaded once when the workout became active (see
+    /// loadPersonalBests) — so this can only ever fire against what was
+    /// already true walking in, never against something logged minutes
+    /// earlier in the same session.
+    private func checkForPR(exerciseName: String, weight: Double, unit: WeightUnit, reps: Int) {
+        guard weight > 0, reps > 0, let best = personalBests[exerciseName] else { return }
+        let weightKg = kgValue(weight, unit: unit)
+        let isPR = weightKg > best.weightKg || (weightKg == best.weightKg && reps > best.reps)
+        guard isPR else { return }
+
+        withAnimation { prAnnouncement = "New PR on \(exerciseName)!" }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation { prAnnouncement = nil }
+        }
+    }
+
+    private func kgValue(_ value: Double, unit: WeightUnit) -> Double {
+        unit == .kg ? value : value * 0.45359237
+    }
+
+    /// Loaded once per workout — a wide-enough history window (limit: 200)
+    /// to have a real shot at every exercise's true best, reduced to one
+    /// PersonalBest per exercise name. Deliberately not refreshed as sets
+    /// get logged this session; see checkForPR.
+    private func loadPersonalBests() {
+        guard let userId = appState.userId else { return }
+        Task {
+            guard let sessions = try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 200) else {
+                return
+            }
+            var bests: [String: PersonalBest] = [:]
+            for session in sessions {
+                for set in session.setsLog {
+                    guard let name = set.exerciseName, let weightKg = set.weightKg, let reps = set.reps,
+                          weightKg > 0, reps > 0 else { continue }
+                    let current = bests[name]
+                    if current == nil || weightKg > current!.weightKg || (weightKg == current!.weightKg && reps > current!.reps) {
+                        bests[name] = PersonalBest(weightKg: weightKg, reps: reps)
+                    }
+                }
+            }
+            personalBests = bests
+        }
     }
 
     private func fetchCompanionComment(for exercise: WorkoutExercise) {
@@ -551,6 +672,7 @@ struct WorkoutTabView: View {
                 loggedSets = []
                 companionComment = nil
                 report = nil
+                loadPersonalBests()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -626,7 +748,17 @@ struct WorkoutTabView: View {
         report = nil
         didSaveSession = false
         errorMessage = nil
+        personalBests = [:]
+        prAnnouncement = nil
+        cancelRestTimer()
     }
+}
+
+// MARK: - PersonalBest
+
+private struct PersonalBest {
+    let weightKg: Double
+    let reps: Int
 }
 
 // MARK: - SessionFeedbackSheet
@@ -1002,6 +1134,223 @@ private struct SetInputRow: View {
 
     private func formatted(_ value: Double) -> String {
         value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
+// MARK: - RestTimerBanner
+
+/// The foreground half of the rest timer — a live countdown from
+/// `endDate`, driven by TimelineView rather than a hand-rolled Timer/Combine
+/// publisher. The background half (a local notification if the app gets
+/// backgrounded mid-rest) is NotificationManager.scheduleRestTimerAlert,
+/// already scheduled by the time this appears.
+private struct RestTimerBanner: View {
+    let endDate: Date
+    let totalSecs: Int
+    let onDone: () -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let remaining = max(0, Int(endDate.timeIntervalSince(context.date).rounded(.up)))
+            HStack(spacing: 12) {
+                Image(systemName: "timer")
+                    .foregroundStyle(Color.fzPrimary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Rest")
+                        .font(.fzBody(11, weight: .semibold))
+                        .foregroundStyle(Color.fzTextSecondary)
+                        .textCase(.uppercase)
+                    Text(timeText(remaining))
+                        .font(.fzMono(20, weight: .semibold))
+                        .foregroundStyle(Color.fzText)
+                }
+
+                Spacer()
+
+                ProgressCircle(fraction: totalSecs > 0 ? Double(remaining) / Double(totalSecs) : 0)
+                    .frame(width: 32, height: 32)
+
+                Button(action: onSkip) {
+                    Text("Skip")
+                        .font(.fzBody(13, weight: .medium))
+                        .foregroundStyle(Color.fzTextSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(Color.fzSurfaceElevated)
+            .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+            .overlay(
+                RoundedRectangle(cornerRadius: ForzeeRadius.chip)
+                    .strokeBorder(Color.fzPrimary.opacity(0.3), lineWidth: 1)
+            )
+            .onChange(of: remaining) { _, newValue in
+                if newValue <= 0 { onDone() }
+            }
+        }
+    }
+
+    private func timeText(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct ProgressCircle: View {
+    /// 1.0 = just started, 0.0 = done.
+    let fraction: Double
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.fzBorder, lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: max(0, min(1, fraction)))
+                .stroke(Color.fzPrimary, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
+// MARK: - AddExerciseSheet
+
+/// Appends a manually-added exercise mid-workout — the modal counterpart to
+/// the generated exercise list. Muscle group is optional but recommended: it
+/// keeps a manually-added exercise counting toward Insights' weekly set
+/// targets the same as anything Kai tagged at generation time.
+private struct AddExerciseSheet: View {
+    let onAdd: (WorkoutExercise) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var sets = 3
+    @State private var reps = "8-12"
+    @State private var restSecs = 90
+    @State private var muscleGroup: MuscleGroup?
+
+    private var canAdd: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.fzBg.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: ForzeeSpacing.sectionGap) {
+                        nameField
+                        setsStepper
+                        repsField
+                        restStepper
+                        muscleGroupPicker
+                    }
+                    .padding(ForzeeSpacing.screenPadding)
+                }
+            }
+            .navigationTitle("Add Exercise")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.foregroundStyle(Color.fzTextSecondary)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                ForzeeButton(title: "Add to Workout", action: add, isDisabled: !canAdd)
+                    .padding(ForzeeSpacing.screenPadding)
+                    .background(Color.fzBg)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.smallGap) {
+            Text("Exercise Name")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+            TextField("e.g. Cable Lateral Raise", text: $name)
+                .font(.fzBody(15))
+                .foregroundStyle(Color.fzText)
+                .padding(12)
+                .background(Color.fzSurface)
+                .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+        }
+    }
+
+    private var setsStepper: some View {
+        Stepper(value: $sets, in: 1...10) {
+            HStack {
+                Text("Sets")
+                    .font(.fzBody(13, weight: .semibold))
+                    .foregroundStyle(Color.fzTextSecondary)
+                    .textCase(.uppercase)
+                Spacer()
+                Text("\(sets)")
+                    .font(.fzMono(15))
+                    .foregroundStyle(Color.fzText)
+            }
+        }
+    }
+
+    private var repsField: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.smallGap) {
+            Text("Reps")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+            TextField("e.g. 8-12", text: $reps)
+                .font(.fzBody(15))
+                .foregroundStyle(Color.fzText)
+                .padding(12)
+                .background(Color.fzSurface)
+                .clipShape(RoundedRectangle(cornerRadius: ForzeeRadius.chip))
+        }
+    }
+
+    private var restStepper: some View {
+        Stepper(value: $restSecs, in: 0...300, step: 15) {
+            HStack {
+                Text("Rest")
+                    .font(.fzBody(13, weight: .semibold))
+                    .foregroundStyle(Color.fzTextSecondary)
+                    .textCase(.uppercase)
+                Spacer()
+                Text("\(restSecs)s")
+                    .font(.fzMono(15))
+                    .foregroundStyle(Color.fzText)
+            }
+        }
+    }
+
+    private var muscleGroupPicker: some View {
+        VStack(alignment: .leading, spacing: ForzeeSpacing.smallGap) {
+            Text("Muscle Group (Optional)")
+                .font(.fzBody(13, weight: .semibold))
+                .foregroundStyle(Color.fzTextSecondary)
+                .textCase(.uppercase)
+            Picker("Muscle Group", selection: $muscleGroup) {
+                Text("None").tag(MuscleGroup?.none)
+                ForEach(MuscleGroup.allCases, id: \.self) { group in
+                    Text(group.displayName).tag(MuscleGroup?.some(group))
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(Color.fzText)
+        }
+    }
+
+    private func add() {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty else { return }
+        onAdd(WorkoutExercise(
+            name: trimmedName,
+            sets: sets,
+            reps: reps.trimmingCharacters(in: .whitespaces).isEmpty ? "8-12" : reps,
+            restSecs: restSecs,
+            primaryMuscleGroup: muscleGroup
+        ))
+        dismiss()
     }
 }
 
