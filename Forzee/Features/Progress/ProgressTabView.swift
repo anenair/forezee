@@ -137,14 +137,16 @@ struct ProgressTabView: View {
         weeklyInsight = try? await KaiEngine.shared.generateWeeklyInsight(userId: userId)
     }
 
-    /// Fetches from the start of the current year — the widest range either
-    /// Month or Year in ReportsSection needs — once, rather than re-fetching
-    /// when the user flips the segmented control.
+    /// Fetches the user's full history once, rather than re-fetching on
+    /// every chevron tap in ReportsSection's PeriodNavigator — browsing
+    /// back to an earlier month or year needs real sessions from back
+    /// then, not just the current year to date.
     private func loadReportSessions() async {
         guard let userId = appState.userId else { return }
         reportSessions = (try? await ForzeeDataService.shared.fetchSessionHistory(
             userId: userId,
-            since: InsightsEngine.startOfYear()
+            since: Date(timeIntervalSince1970: 0),
+            limit: 10_000
         )) ?? []
     }
 

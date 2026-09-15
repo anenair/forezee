@@ -10,10 +10,16 @@
 // is free, Kai narrating what it means is the premium layer
 // (Kai's Weekly Read, already gated, covers that).
 //
-// Also renders an actual calendar (WorkoutCalendarView below) —
-// one grid per month, marking each day a session happened with an
+// Also renders an actual calendar (WorkoutCalendarView below) — always
+// a single month's grid, marking each day a session happened with an
 // icon for that session's workout type. Tapping a marked day opens
 // SessionDetailView for that exact day's logged exercises.
+//
+// Both the stats and the calendar are navigable to a past month/year
+// (PeriodNavigator below), not locked to "now" — that only works
+// because ProgressTabView fetches this section's full session
+// history rather than just the current year to date; see
+// loadReportSessions there.
 // ============================================================
 
 import SwiftUI
@@ -24,12 +30,18 @@ enum ReportPeriod: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var label: String { self == .month ? "Month" : "Year" }
-    var startDate: Date { self == .month ? InsightsEngine.startOfMonth() : InsightsEngine.startOfYear() }
 }
 
 struct ReportsSection: View {
     let sessions: [SessionHistoryEntry]
     @Binding var period: ReportPeriod
+
+    /// The single month currently being viewed. The calendar below always
+    /// shows exactly this one month — Year mode changes what the ReportCard
+    /// aggregates (that month's whole year) but never expands the calendar
+    /// into a month list. Chevrons always step by month, in both modes,
+    /// so "left/right" has one consistent meaning throughout this section.
+    @State private var anchor: Date = .now
 
     var body: some View {
         VStack(alignment: .leading, spacing: ForzeeSpacing.itemGap) {
@@ -48,9 +60,86 @@ struct ReportsSection: View {
                 .frame(width: 140)
             }
 
-            ReportCard(report: InsightsEngine.periodReport(sessions: sessions, since: period.startDate), period: period)
+            PeriodNavigator(anchor: $anchor)
 
-            WorkoutCalendarView(sessions: sessions, period: period)
+            ReportCard(report: currentReport, period: period)
+
+            WorkoutCalendarView(sessions: sessions, monthDate: anchor)
+        }
+    }
+
+    private var currentReport: InsightsEngine.PeriodReport {
+        switch period {
+        case .month:
+            return InsightsEngine.periodReport(
+                sessions: sessions,
+                since: InsightsEngine.startOfMonth(anchor),
+                until: min(InsightsEngine.endOfMonth(anchor), .now)
+            )
+        case .year:
+            return InsightsEngine.periodReport(
+                sessions: sessions,
+                since: InsightsEngine.startOfYear(anchor),
+                until: min(InsightsEngine.endOfYear(anchor), .now)
+            )
+        }
+    }
+}
+
+// MARK: - PeriodNavigator
+
+/// Chevron navigation to move the viewed month back and forward — without
+/// this, "Report" could only ever show the current month, with no way to
+/// browse to any other one. Always steps by month regardless of the
+/// Month/Year segmented control — that control only changes what the
+/// ReportCard aggregates, never how these chevrons behave.
+private struct PeriodNavigator: View {
+    @Binding var anchor: Date
+
+    private var calendar: Calendar { .current }
+
+    var body: some View {
+        HStack {
+            Button(action: goBack) {
+                Image(systemName: "chevron.left")
+                    .frame(width: 32, height: 32)
+            }
+            Spacer()
+            Text(label)
+                .font(.fzBody(14, weight: .semibold))
+                .foregroundStyle(Color.fzText)
+            Spacer()
+            Button(action: goForward) {
+                Image(systemName: "chevron.right")
+                    .frame(width: 32, height: 32)
+            }
+            .disabled(!canGoForward)
+            .opacity(canGoForward ? 1 : 0.3)
+        }
+        .foregroundStyle(Color.fzTextSecondary)
+        .buttonStyle(.plain)
+    }
+
+    private var label: String {
+        anchor.formatted(.dateTime.month(.wide).year())
+    }
+
+    /// Never lets the user navigate into a month that hasn't happened yet.
+    private var canGoForward: Bool {
+        guard let next = calendar.date(byAdding: .month, value: 1, to: anchor) else { return false }
+        return InsightsEngine.startOfMonth(next) <= .now
+    }
+
+    private func goBack() {
+        withAnimation {
+            if let prev = calendar.date(byAdding: .month, value: -1, to: anchor) { anchor = prev }
+        }
+    }
+
+    private func goForward() {
+        guard canGoForward else { return }
+        withAnimation {
+            if let next = calendar.date(byAdding: .month, value: 1, to: anchor) { anchor = next }
         }
     }
 }
@@ -121,12 +210,12 @@ private struct ReportLine: View {
 
 // MARK: - WorkoutCalendarView
 
-/// One calendar grid per month in range — just the current month for
-/// Month, every month from Jan 1 through today for Year (most recent
-/// first, so a partial year doesn't bury this month at the bottom).
+/// Always exactly one calendar grid — the month PeriodNavigator has
+/// anchored to. Year mode never expands this into a month list; it only
+/// changes what ReportCard aggregates above.
 private struct WorkoutCalendarView: View {
     let sessions: [SessionHistoryEntry]
-    let period: ReportPeriod
+    let monthDate: Date
 
     private var calendar: Calendar { .current }
 
@@ -141,28 +230,8 @@ private struct WorkoutCalendarView: View {
         return map
     }
 
-    private var months: [Date] {
-        switch period {
-        case .month:
-            return [.now]
-        case .year:
-            var result: [Date] = []
-            var current = InsightsEngine.startOfYear()
-            while current <= Date.now {
-                result.append(current)
-                guard let next = calendar.date(byAdding: .month, value: 1, to: current) else { break }
-                current = next
-            }
-            return result.reversed()
-        }
-    }
-
     var body: some View {
-        VStack(spacing: ForzeeSpacing.itemGap) {
-            ForEach(months, id: \.self) { month in
-                MonthCalendarCard(monthDate: month, sessionsByDay: sessionsByDay)
-            }
-        }
+        MonthCalendarCard(monthDate: monthDate, sessionsByDay: sessionsByDay)
     }
 }
 

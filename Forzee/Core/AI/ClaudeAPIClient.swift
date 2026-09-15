@@ -202,12 +202,24 @@ final class ClaudeAPIClient {
     /// not-yet-valid) JSON text after every fragment — see
     /// IncrementalCoachTextExtractor for how a caller turns that into
     /// something actually displayable before the object is complete.
+    ///
+    /// Requires `eager_input_streaming: true` on the tool definition —
+    /// without it, Anthropic's API buffers a tool call's arguments and
+    /// sends them as one chunk near the end of the stream regardless of
+    /// `stream: true`, which is indistinguishable from "not streaming" on
+    /// the receiving end (this was a real, confirmed bug: no beta header
+    /// exists for this, it's a plain field on the tool). Because eager
+    /// streaming skips the API's own input validation, an accumulated
+    /// buffer that hits `maxTokens` before the object closes can be
+    /// incomplete/invalid JSON — the caller (KaiEngine.sendCoachMessage)
+    /// already treats a JSONSerialization failure as a graceful fallback,
+    /// not a crash, which is exactly the guard this needs.
     func streamCompletionWithForcedTool(
         model: KaiModel,
         systemPrompt: String,
         messages: [KaiMessage],
         tool: ClaudeTool,
-        maxTokens: Int = 1536,
+        maxTokens: Int = 4096,
         onPartialJSON: @escaping (String) -> Void
     ) async throws -> [String: Any] {
         guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
@@ -226,7 +238,12 @@ final class ClaudeAPIClient {
             "stream": true,
             "system": systemPrompt,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
-            "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
+            "tools": [[
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.inputSchema,
+                "eager_input_streaming": true,
+            ]],
             "tool_choice": ["type": "tool", "name": tool.name],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
