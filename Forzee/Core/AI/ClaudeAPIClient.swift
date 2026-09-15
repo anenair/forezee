@@ -381,6 +381,21 @@ final class ClaudeAPIClient {
             let jsonText = blockBuffers[index] ?? ""
             guard let data = jsonText.data(using: .utf8),
                   let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                // The buffer never closed into valid JSON — almost always
+                // because the stream ended (maxTokens, a dropped
+                // connection) before the tool call's object finished. The
+                // live preview above already revealed this reply's opening
+                // line character-by-character from the very same buffer,
+                // scanning for it regardless of whether the JSON around it
+                // ever closes — so salvage that same text as a plain reply
+                // instead of discarding it and surfacing a bare failure
+                // that overwrites a message the user already watched
+                // appear on screen.
+                if name == previewToolName,
+                   let salvaged = IncrementalCoachTextExtractor.preview(fromRawJSON: jsonText),
+                   !salvaged.isEmpty {
+                    return .text(salvaged)
+                }
                 throw ClaudeAPIError.malformedResponse
             }
             return .toolUse(name: name, input: input)
