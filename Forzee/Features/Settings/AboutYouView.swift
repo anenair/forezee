@@ -88,6 +88,9 @@ struct AboutYouView: View {
             .background(Color.fzBg)
         }
         .onAppear(perform: loadFromProfile)
+        .onChange(of: appState.userProfile?.weightUnit) { oldUnit, newUnit in
+            convertEnteredFields(from: oldUnit, to: newUnit)
+        }
     }
 
     // MARK: - Calculated (read-only)
@@ -321,6 +324,46 @@ struct AboutYouView: View {
     private func resolvedLengthCm(_ text: String) -> Double? {
         guard let value = Double(text) else { return nil }
         return isImperial ? value * 2.54 : value
+    }
+
+    /// My Plan's unit toggle lives on the same profile but a different
+    /// screen — switching it there flips `isImperial` here too, but the
+    /// raw text already sitting in height/weight/waist/hip doesn't convert
+    /// on its own (a TextField's text doesn't know what unit it meant).
+    /// Left alone, that stale text under the *new* unit label reads as a
+    /// completely different measurement — most visibly, resolvedHeightCm()
+    /// on a now-empty or wrong-unit height makes the target-weight-by-BMI
+    /// slider look like it "stopped updating." Converts every entered
+    /// value in place so the numbers stay physically the same, just
+    /// re-expressed in the new unit.
+    private func convertEnteredFields(from oldUnit: String?, to newUnit: String?) {
+        guard let oldUnit, let newUnit, oldUnit != newUnit else { return }
+        let wasImperial = oldUnit == "lbs"
+
+        if wasImperial, let feet = Double(heightFeetText) {
+            let inches = Double(heightInchesText) ?? 0
+            heightCmText = formattedNumber((feet * 12 + inches) * 2.54)
+        } else if !wasImperial, let cm = Double(heightCmText) {
+            let totalInches = cm / 2.54
+            heightFeetText = String(Int(totalInches / 12))
+            heightInchesText = String(Int(totalInches.truncatingRemainder(dividingBy: 12).rounded()))
+        }
+
+        if let weight = Double(currentWeightText) {
+            let kg = wasImperial ? weight * 0.453592 : weight
+            currentWeightText = formattedNumber(newUnit == "lbs" ? kg / 0.453592 : kg)
+        }
+        if let waist = Double(waistText) {
+            let cm = wasImperial ? waist * 2.54 : waist
+            waistText = formattedNumber(newUnit == "lbs" ? cm / 2.54 : cm)
+        }
+        if let hip = Double(hipText) {
+            let cm = wasImperial ? hip * 2.54 : hip
+            hipText = formattedNumber(newUnit == "lbs" ? cm / 2.54 : cm)
+        }
+        // targetBMI needs no conversion — BMI is unit-independent; only its
+        // derived display (targetWeightSlider) reads isImperial, which
+        // already updates live off the new appState.userProfile.weightUnit.
     }
 
     /// The actual target-weight value to store — derived from the BMI
