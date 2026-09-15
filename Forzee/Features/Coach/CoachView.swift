@@ -27,6 +27,14 @@ struct CoachView: View {
     @State private var isVoiceModeOn = false
     @State private var isNearBottom = true
 
+    /// A live-typable preview of the in-progress reply's first text/
+    /// coaching_note block — see KaiEngine.sendCoachMessage's
+    /// onPartialText and IncrementalCoachTextExtractor. Cleared the
+    /// moment the full CoachResponse comes back; only ever shown as a
+    /// plain-text stand-in bubble, never through the real block renderer
+    /// (there's nothing structurally complete to render yet).
+    @State private var streamingPreview: String = ""
+
     // Structured actions (see Core/AI/CoachProtocol) — keyed by the
     // message that carried them, so a "Build Workout" tapped on one reply
     // never gets confused with another later in the same conversation.
@@ -69,8 +77,18 @@ struct CoachView: View {
                                     }
 
                                     if kaiEngine.isResponding {
-                                        KaiThinkingBubble(showAvatar: messages.last?.role != .assistant)
-                                            .padding(.top, messages.last?.role != .assistant ? 10 : 0)
+                                        let isNewTurn = messages.last?.role != .assistant
+                                        if streamingPreview.isEmpty {
+                                            KaiThinkingBubble(showAvatar: isNewTurn)
+                                                .padding(.top, isNewTurn ? 10 : 0)
+                                        } else {
+                                            MessageBubble(
+                                                message: KaiMessage(role: .assistant, content: streamingPreview),
+                                                response: CoachResponse(blocks: [.text(TextBlock(content: streamingPreview))]),
+                                                showAvatar: isNewTurn
+                                            )
+                                            .padding(.top, isNewTurn ? 10 : 0)
+                                        }
                                     }
                                 }
 
@@ -109,6 +127,9 @@ struct CoachView: View {
                         }
                         .onChange(of: kaiEngine.isResponding) { _, _ in
                             scrollToBottom(proxy: proxy, animated: true)
+                        }
+                        .onChange(of: streamingPreview) { _, _ in
+                            scrollToBottom(proxy: proxy, animated: false)
                         }
                         .onAppear {
                             scrollToBottom(proxy: proxy, animated: false)
@@ -337,9 +358,11 @@ struct CoachView: View {
     /// Shared by the text input and voice mode — a voice-captured command
     /// and a typed message both flow through the same structured-reply
     /// pipeline (see KaiEngine.sendCoachMessage) and land in the same
-    /// conversation thread. Not streamed — a forced tool call's arguments
-    /// arrive as one JSON blob, not prose Claude composes live — so this
-    /// awaits the full CoachResponse rather than accumulating tokens.
+    /// conversation thread. The forced tool call's JSON arguments still
+    /// stream in over the wire, so `streamingPreview` fills in live as the
+    /// reply's first text/coaching_note block closes (see
+    /// IncrementalCoachTextExtractor) — but the actual KaiMessage appended
+    /// to `messages` is always the complete, validated CoachResponse.
     private func sendMessage(_ rawText: String, speakReply: Bool) {
         guard let userId = appState.userId else { return }
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -350,11 +373,16 @@ struct CoachView: View {
 
         draftMessage = ""
         errorMessage = nil
+        streamingPreview = ""
         messages.append(KaiMessage(role: .user, content: text))
 
         Task {
             do {
-                let response = try await kaiEngine.sendCoachMessage(message: text, userId: userId, history: messages)
+                let response = try await kaiEngine.sendCoachMessage(
+                    message: text, userId: userId, history: messages,
+                    onPartialText: { preview in streamingPreview = preview }
+                )
+                streamingPreview = ""
                 let reply = KaiMessage(role: .assistant, content: response.encodedContent())
                 messages.append(reply)
                 if speakReply {
@@ -363,6 +391,7 @@ struct CoachView: View {
                     }
                 }
             } catch {
+                streamingPreview = ""
                 errorMessage = error.localizedDescription
                 if speakReply { listenForWakePhrase() }
             }
@@ -372,11 +401,12 @@ struct CoachView: View {
 
 // MARK: - KaiThinkingBubble
 
-/// Shown in place of the assistant bubble for the whole wait between
-/// sending a message and the full CoachResponse coming back (see
-/// KaiEngine.sendCoachMessage — a forced tool call isn't streamed, so
-/// there's no partial text to show along the way) — Kai's visual
-/// signature standing in for a generic spinner.
+/// Shown in place of the assistant bubble only until `streamingPreview`
+/// has anything in it — once Kai's reply starts revealing its first
+/// text/coaching_note block (see KaiEngine.sendCoachMessage's
+/// onPartialText), that preview bubble takes over instead. Kai's visual
+/// signature standing in for a generic spinner during the gap before
+/// there's anything to show.
 private struct KaiThinkingBubble: View {
     let showAvatar: Bool
 

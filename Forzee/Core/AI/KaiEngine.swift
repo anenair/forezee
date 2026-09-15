@@ -129,7 +129,9 @@ final class KaiEngine: ObservableObject {
     /// recovery_check) still runs first — a matched skill's plain-text
     /// reply is wrapped as a single TextBlock so it flows through the
     /// same rendering and persistence path as everything else, rather
-    /// than needing its own special case.
+    /// than needing its own special case (and isn't streamed — those
+    /// replies are short and come back in one shot from run(skill:) either
+    /// way, so `onPartialText` is simply never called for this branch).
     ///
     /// Runs schema validation (the Codable decode inside
     /// CoachResponse.from(toolInput:)) and then domain validation
@@ -137,16 +139,19 @@ final class KaiEngine: ObservableObject {
     /// response that fails either becomes a graceful fallback text
     /// reply, never a crash or a nonsensical block reaching the UI.
     ///
-    /// Trade-off accepted deliberately: this is NOT streamed. A forced
-    /// tool call's arguments arrive as one JSON blob, not prose Claude is
-    /// composing live — there's no meaningful "token so far" to show
-    /// mid-generation the way chat()'s plain-text streaming can. CoachView
-    /// shows its thinking indicator for the whole wait instead of a live
-    /// typewriter effect.
+    /// `onPartialText` gets a live-typable preview of the reply's first
+    /// text/coaching_note block WHILE it's still generating (see
+    /// IncrementalCoachTextExtractor) — a forced tool call's JSON
+    /// arguments stream the same way plain text does, they just aren't
+    /// valid JSON until the object closes, so only that one field can be
+    /// safely shown incrementally. Later blocks (a workout, say) still
+    /// arrive, they just appear fully-formed with the rest of the reply
+    /// once it completes rather than typing themselves out.
     func sendCoachMessage(
         message: String,
         userId: String,
-        history: [KaiMessage]
+        history: [KaiMessage],
+        onPartialText: @escaping (String) -> Void = { _ in }
     ) async throws -> CoachResponse {
         try await usageGate.checkLimit(userId: userId, taskType: .chatMessage)
         let context = await contextBuilder.buildSnapshot(userId: userId)
@@ -179,11 +184,15 @@ final class KaiEngine: ObservableObject {
 
         let response: CoachResponse
         do {
-            let toolInput = try await apiClient.completeWithForcedTool(
+            let toolInput = try await apiClient.streamCompletionWithForcedTool(
                 model: model,
                 systemPrompt: KaiSystemPrompt.build(context: context),
                 messages: messages,
-                tool: CoachResponse.tool
+                tool: CoachResponse.tool,
+                onPartialJSON: { buffer in
+                    guard let preview = IncrementalCoachTextExtractor.preview(fromRawJSON: buffer) else { return }
+                    onPartialText(preview)
+                }
             )
             let decoded = try CoachResponse.from(toolInput: toolInput)
             response = CoachResponseValidator.sanitize(decoded)
