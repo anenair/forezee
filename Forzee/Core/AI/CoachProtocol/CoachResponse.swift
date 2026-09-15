@@ -474,13 +474,21 @@ extension CoachResponse {
         },
         "actions": {
           "type": "array",
-          "description": "Structured actions the user can trigger. Only include build_workout, and only alongside a workout block — every other action type is not yet supported and will be ignored.",
+          "description": "Structured actions the user can trigger. Only build_workout and replace_exercise are supported right now — every other action type will be ignored. build_workout needs a workout block in the same reply. replace_exercise needs a payload naming the swap, and reads better paired with a confirmation block stating the swap in words.",
           "items": {
             "type": "object",
             "properties": {
               "id": { "type": "string" },
-              "type": { "type": "string", "enum": ["build_workout"] },
-              "label": { "type": "string" }
+              "type": { "type": "string", "enum": ["build_workout", "replace_exercise"] },
+              "label": { "type": "string" },
+              "payload": {
+                "type": "object",
+                "description": "Required for type=replace_exercise: exerciseName is the exercise to remove from the workout block in this same reply (must match one there exactly), replacementName is what to swap it in for.",
+                "properties": {
+                  "exerciseName": { "type": "string" },
+                  "replacementName": { "type": "string" }
+                }
+              }
             },
             "required": ["id", "type", "label"]
           }

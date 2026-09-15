@@ -126,7 +126,22 @@ enum CoachResponseValidator {
         switch action.type {
         case .buildWorkout:
             return blocks.contains { if case .workout = $0 { return true }; return false }
-        case .startWorkout, .replaceExercise, .modifyWorkout, .logSet, .skipExercise,
+        case .replaceExercise:
+            // Requires a real payload naming both sides of the swap, AND
+            // the exercise being removed must actually be present in a
+            // workout block in this same reply — an action claiming to
+            // replace something that isn't there is never rendered,
+            // regardless of what the model included.
+            guard let exerciseName = action.payload?["exerciseName"],
+                  let replacementName = action.payload?["replacementName"],
+                  !replacementName.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+            return blocks.contains { block in
+                guard case .workout(let workoutBlock) = block else { return false }
+                return workoutBlock.workout.exercises.contains {
+                    $0.name.caseInsensitiveCompare(exerciseName) == .orderedSame
+                }
+            }
+        case .startWorkout, .modifyWorkout, .logSet, .skipExercise,
              .startTimer, .finishWorkout, .showExercise, .viewProgress:
             // Not implemented yet — see CoachActionExecutor. Permitting an
             // action the executor can't run would render a dead button.

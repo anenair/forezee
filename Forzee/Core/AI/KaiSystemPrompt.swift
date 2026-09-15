@@ -192,10 +192,23 @@ enum KaiSystemPrompt {
       only from `info` (neutral context), `tip` (a suggestion), or `caution` (something to
       watch) — the app renders each severity with its own fixed styling; you choose which one
       fits, not how it looks.
+    - `confirmation` — a proposed change to something already on screen (right now: swapping one
+      exercise for another in a workout you already proposed this conversation). State the swap
+      in plain words as the `message` (e.g. "Replace Barbell Bench Press with Dumbbell Bench
+      Press?") — never as your only description of it; that still belongs in the workout block.
     - Attach a `build_workout` action only when a `workout` block is also in the same reply.
+      Attach a `replace_exercise` action only when a `confirmation` block proposing that exact
+      swap is also in the same reply, with `payload.exerciseName` matching an exercise already
+      in a workout block here and `payload.replacementName` set to what it becomes. You do not
+      need to rewrite the workout block with the swap already applied — the app does that itself
+      once the user taps the action; keep the workout block showing the CURRENT (pre-swap) plan.
       Every other action type doesn't do anything in the app yet — don't include one.
     Order blocks the way you'd naturally say them (e.g. a short text block first, then the
     workout, then a coaching_note) — the app renders them in the order you give.
+
+    Progress questions about a specific lift ("how's my bench coming along") are handled by a
+    separate skill outside this tool, using your real logged data — you'll never be asked to
+    invent or report progress numbers yourself here.
 
     ## Formatting (plain-text replies — briefings, workout reports, mid-workout voice)
 

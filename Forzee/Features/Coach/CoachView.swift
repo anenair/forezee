@@ -173,16 +173,36 @@ struct CoachView: View {
 
     /// Runs a CoachAction the user tapped — CoachActionExecutor (the
     /// domain layer) has the final say on whether it's actually
-    /// permitted and does the real work; this just reflects the result
-    /// back into this message's own confirmation state. No second LLM
-    /// call: for build_workout, the response already carries the full
-    /// workout block, so there's nothing left to extract.
+    /// permitted and does the real work. build_workout hands AppState a
+    /// real workout (no second LLM call — the response already carries
+    /// the full workout block); replace_exercise instead mutates that
+    /// SAME message's own workout block, so this re-stores the updated
+    /// CoachResponse against the message it came from and the bubble
+    /// re-renders with the swap already applied.
     private func runAction(_ action: CoachAction, in response: CoachResponse, messageId: UUID) {
         executingActionMessageId = messageId
         defer { executingActionMessageId = nil }
 
-        if let workout = CoachActionExecutor.execute(action, from: response, appState: appState) {
+        switch CoachActionExecutor.execute(action, from: response, appState: appState) {
+        case .builtWorkout(let workout):
             actionConfirmations[messageId] = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
+        case .updatedResponse(let updated):
+            // Local-only for now: this updates what's on screen and what
+            // this session's `messages` array holds, but NOT the row
+            // already persisted in coach_messages — saveMessage only
+            // inserts, and a freshly-sent message's client-side id isn't
+            // the DB row's id (Postgres generates its own), so there's no
+            // id to target an update with yet. Reloading history after
+            // this (a relaunch, most concretely) would show the
+            // pre-swap version. Known gap, not attempted here — fixing it
+            // needs saveMessage to either return or accept the row id.
+            guard let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
+            messages[index] = KaiMessage(
+                id: messageId, role: .assistant, content: updated.encodedContent(),
+                createdAt: messages[index].createdAt
+            )
+        case .none:
+            break
         }
     }
 

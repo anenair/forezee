@@ -161,18 +161,27 @@ final class KaiEngine: ObservableObject {
 
         try? await ForzeeDataService.shared.saveMessage(KaiMessage(role: .user, content: message), userId: userId)
 
-        let candidates = ["adjust_plan_from_chat", "recovery_check"].compactMap(SkillLoader.shared.skill(named:))
+        let candidates = ["adjust_plan_from_chat", "recovery_check", "show_progress"].compactMap(SkillLoader.shared.skill(named:))
         if !candidates.isEmpty,
            let dispatch = try? await discoverAndRunSkill(
                 message: message, userId: userId, history: history,
                 candidateSkills: candidates, systemPrompt: KaiSystemPrompt.build(context: context)
            ),
            case .matched(let skill, let input) = dispatch {
-            let replyText = handleChatSkillReply(skill, input: input)
-            if skill.name == "adjust_plan_from_chat" {
-                try? await applyPlanAdjustment(input, userId: userId)
+            let response: CoachResponse
+            if skill.name == "show_progress" {
+                // Haiku only identified WHICH exercise — the numbers below
+                // come straight from real logged sets (InsightsEngine),
+                // never from the model, matching the system prompt's
+                // "never fabricate health data" rule.
+                response = await buildProgressResponse(exerciseName: input["exercise_name"] as? String, userId: userId)
+            } else {
+                let replyText = handleChatSkillReply(skill, input: input)
+                if skill.name == "adjust_plan_from_chat" {
+                    try? await applyPlanAdjustment(input, userId: userId)
+                }
+                response = CoachResponse(blocks: [.text(TextBlock(content: replyText))])
             }
-            let response = CoachResponse(blocks: [.text(TextBlock(content: replyText))])
             try? await ForzeeDataService.shared.saveMessage(
                 KaiMessage(role: .assistant, content: response.encodedContent()), userId: userId
             )
@@ -223,10 +232,39 @@ final class KaiEngine: ObservableObject {
         case "adjust_plan_from_chat":
             return input["confirmation_reply"] as? String ?? "Done."
         case "recovery_check":
-            return input["reply"] as? String ?? "I couldn't put together a recommendation — try asking again."
+            return input["reply"] as? String ?? "I couldn't put together a recommendation — try again."
         default:
             return "Something in Kai's skills got confused — try again."
         }
+    }
+
+    /// Builds a real ProgressBlock from InsightsEngine.exerciseProgress —
+    /// the show_progress skill only ever tells us WHICH exercise; every
+    /// number here is read straight off actual logged sets. Falls back to
+    /// a plain text reply (never a ProgressBlock with made-up numbers)
+    /// when there's no exercise name or no matching history.
+    private func buildProgressResponse(exerciseName: String?, userId: String) async -> CoachResponse {
+        guard let exerciseName, !exerciseName.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return CoachResponse(blocks: [.text(TextBlock(
+                content: "Which exercise did you want to check progress on?"
+            ))])
+        }
+
+        let sessions = (try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 60)) ?? []
+        guard let progress = InsightsEngine.exerciseProgress(sessions: sessions, exerciseName: exerciseName) else {
+            return CoachResponse(blocks: [.text(TextBlock(
+                content: "I don't have any logged sets for \(exerciseName) yet — log a session with it and ask again."
+            ))])
+        }
+
+        let block = ProgressBlock(
+            title: "\(exerciseName.capitalized) Progress",
+            metric: "top_set_weight_kg",
+            current: progress.current,
+            previous: progress.previous,
+            unit: "kg"
+        )
+        return CoachResponse(blocks: [.progress(block)])
     }
 
     /// Applies only the fields the model actually included — see

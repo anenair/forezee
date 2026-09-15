@@ -60,7 +60,7 @@ struct WorkoutTabView: View {
     // workout becomes active), so a set only ever competes against what
     // was true walking in, never against something logged minutes ago in
     // the same session.
-    @State private var personalBests: [String: PersonalBest] = [:]
+    @State private var personalBests: [String: InsightsEngine.PersonalBest] = [:]
     @State private var prAnnouncement: String?
 
     var body: some View {
@@ -618,27 +618,15 @@ struct WorkoutTabView: View {
     }
 
     /// Loaded once per workout — a wide-enough history window (limit: 200)
-    /// to have a real shot at every exercise's true best, reduced to one
-    /// PersonalBest per exercise name. Deliberately not refreshed as sets
-    /// get logged this session; see checkForPR.
+    /// to have a real shot at every exercise's true best. Deliberately not
+    /// refreshed as sets get logged this session; see checkForPR.
     private func loadPersonalBests() {
         guard let userId = appState.userId else { return }
         Task {
             guard let sessions = try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 200) else {
                 return
             }
-            var bests: [String: PersonalBest] = [:]
-            for session in sessions {
-                for set in session.setsLog {
-                    guard let name = set.exerciseName, let weightKg = set.weightKg, let reps = set.reps,
-                          weightKg > 0, reps > 0 else { continue }
-                    let current = bests[name]
-                    if current == nil || weightKg > current!.weightKg || (weightKg == current!.weightKg && reps > current!.reps) {
-                        bests[name] = PersonalBest(weightKg: weightKg, reps: reps)
-                    }
-                }
-            }
-            personalBests = bests
+            personalBests = InsightsEngine.personalBests(sessions: sessions)
         }
     }
 
@@ -752,13 +740,6 @@ struct WorkoutTabView: View {
         prAnnouncement = nil
         cancelRestTimer()
     }
-}
-
-// MARK: - PersonalBest
-
-private struct PersonalBest {
-    let weightKg: Double
-    let reps: Int
 }
 
 // MARK: - SessionFeedbackSheet

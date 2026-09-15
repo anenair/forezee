@@ -317,8 +317,9 @@ struct CoachActionRow: View {
 
     private var actionIcon: String {
         switch action.type {
-        case .buildWorkout: return "dumbbell.fill"
-        default:             return "bolt.fill"
+        case .buildWorkout:    return "dumbbell.fill"
+        case .replaceExercise: return "arrow.triangle.2.circlepath"
+        default:                return "bolt.fill"
         }
     }
 }
