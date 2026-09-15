@@ -90,11 +90,13 @@ enum InsightsEngine {
 
     // MARK: - Period Reports (Monthly / Annual)
 
-    /// Summary stats for everything on/after `since` — powers the Progress
-    /// tab's Month/Year report toggle. Callers pass a wide-enough session
-    /// fetch (see ForzeeDataService.fetchSessionHistory's since: parameter)
-    /// for `since` to actually be meaningful; this itself does the date
-    /// filtering, so the same fetched array works for both Month and Year.
+    /// Summary stats for everything in `since...until` — powers the
+    /// Progress tab's Month/Year report toggle, including browsing to a
+    /// past month/year (see ReportsSection's navigation), not just the
+    /// current one. Callers pass a wide-enough session fetch (see
+    /// ForzeeDataService.fetchSessionHistory's since: parameter) for the
+    /// range to actually be meaningful; this itself does the date
+    /// filtering, so the same fetched array works for any period viewed.
     struct PeriodReport {
         let totalSessions: Int
         let totalVolumeKg: Double
@@ -108,9 +110,9 @@ enum InsightsEngine {
     static func periodReport(
         sessions: [SessionHistoryEntry],
         since: Date,
-        asOf now: Date = .now
+        until: Date = .now
     ) -> PeriodReport {
-        let inRange = sessions.filter { $0.startedAt >= since && $0.startedAt <= now }
+        let inRange = sessions.filter { $0.startedAt >= since && $0.startedAt <= until }
 
         var groupCounts: [MuscleGroup: Int] = [:]
         var workoutCounts: [String: Int] = [:]
@@ -140,7 +142,10 @@ enum InsightsEngine {
             mostRepeatedWorkoutId: topWorkout?.key,
             mostRepeatedWorkoutName: topWorkout.flatMap { workoutNames[$0.key] },
             mostRepeatedWorkoutCount: topWorkout?.value ?? 0,
-            momentumScore: momentumScore(sessions: inRange, asOf: now)
+            // "As of" the end of the window being viewed, not real "now" —
+            // for a past month/year, momentum should read as it stood at
+            // the time, not decayed further by everything since.
+            momentumScore: momentumScore(sessions: inRange, asOf: until)
         )
     }
 
@@ -148,8 +153,16 @@ enum InsightsEngine {
         Calendar.current.dateInterval(of: .month, for: date)?.start ?? date
     }
 
+    static func endOfMonth(_ date: Date = .now) -> Date {
+        Calendar.current.dateInterval(of: .month, for: date)?.end ?? date
+    }
+
     static func startOfYear(_ date: Date = .now) -> Date {
         Calendar.current.dateInterval(of: .year, for: date)?.start ?? date
+    }
+
+    static func endOfYear(_ date: Date = .now) -> Date {
+        Calendar.current.dateInterval(of: .year, for: date)?.end ?? date
     }
 
     // MARK: - Personal Bests

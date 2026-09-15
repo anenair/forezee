@@ -147,19 +147,27 @@ private struct CoachExerciseRow: View {
             Circle().fill(Color.fzPrimary).frame(width: 5, height: 5).padding(.top, 6)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // fixedSize forces each Text to claim the vertical (and,
+                    // for the prescription, horizontal) space its own
+                    // content actually needs — without it, this HStack's
+                    // Spacer can propose an ambiguous width that silently
+                    // truncates text to one line instead of wrapping.
                     Text(exercise.name)
                         .font(.fzBody(14, weight: .semibold))
                         .foregroundStyle(Color.fzText)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Text(prescriptionText)
                         .font(.fzMono(12, weight: .medium))
                         .foregroundStyle(Color.fzPrimary)
+                        .fixedSize()
                 }
                 if let notes = exercise.notes, !notes.isEmpty {
                     Text(notes)
                         .font(.fzBody(12))
                         .italic()
                         .foregroundStyle(Color.fzTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
