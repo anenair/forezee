@@ -29,19 +29,16 @@ import SwiftUI
 struct WorkoutTabView: View {
 
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var sessionManager = WorkoutSessionManager.shared
     @ObservedObject private var voiceManager = VoiceManager.shared
     @ObservedObject private var voiceSynthesizer = KaiVoiceSynthesizer.shared
     @ObservedObject private var syncManager = SyncManager.shared
 
-    @State private var workout: GeneratedWorkout?
-    @State private var completedExerciseIds: Set<UUID> = []
-    @State private var loggedSets: [LoggedSet] = []
     @State private var companionComment: String?
     @State private var report: String?
 
     @State private var isGenerating = false
     @State private var isSavingSession = false
-    @State private var didSaveSession = false
     @State private var showFeedbackSheet = false
     @State private var isVoiceModeOn = false
     @State private var errorMessage: String?
@@ -56,12 +53,20 @@ struct WorkoutTabView: View {
     @State private var restTimerEndDate: Date?
     @State private var restTimerTotalSecs: Int = 0
 
-    // PR detection — a frozen pre-session baseline (loaded once when the
-    // workout becomes active), so a set only ever competes against what
-    // was true walking in, never against something logged minutes ago in
-    // the same session.
-    @State private var personalBests: [String: InsightsEngine.PersonalBest] = [:]
+    // PR announcement — a transient toast. The PR *check* itself lives in
+    // WorkoutSessionManager (isPersonalRecord), against the same frozen
+    // personalBests baseline it loads; this is only the "show it, then
+    // fade it out" UI reaction to a true result.
     @State private var prAnnouncement: String?
+
+    /// Tracks which workout this view has already synced its own
+    /// UI-only state against — a workout can become active from three
+    /// different places (this view's own Generate, Coach chat's Build
+    /// Workout, or "Repeat This Workout" from a past session), and
+    /// whichever one it was, this view still needs to reset its
+    /// companion-comment/report state and load a personal-bests baseline
+    /// exactly once for it. See `syncIfNewWorkout`.
+    @State private var syncedWorkoutId: UUID?
 
     var body: some View {
         NavigationStack {
@@ -79,7 +84,7 @@ struct WorkoutTabView: View {
                             )
                         }
 
-                        if let workout {
+                        if let workout = sessionManager.workout {
                             workoutCard(workout)
                         } else {
                             emptyState
@@ -106,7 +111,7 @@ struct WorkoutTabView: View {
                             .foregroundStyle(Color.fzTextSecondary)
                     }
                 }
-                if workout != nil {
+                if sessionManager.workout != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(action: toggleVoiceMode) {
                             Image(systemName: isVoiceModeOn ? "mic.fill" : "mic")
@@ -117,9 +122,9 @@ struct WorkoutTabView: View {
             }
         }
         .sheet(isPresented: $showFeedbackSheet) {
-            if let workout {
+            if sessionManager.workout != nil {
                 SessionFeedbackSheet(isSaving: isSavingSession) { feedback in
-                    Task { await saveSession(workout, feedback: feedback) }
+                    Task { await saveSession(feedback: feedback) }
                 }
             }
         }
@@ -139,19 +144,25 @@ struct WorkoutTabView: View {
             Text("You haven't logged any sets yet — finishing now would only save the exercises you checked off, not real weights or reps.")
         }
         .onDisappear { stopVoiceMode() }
-        .onAppear {
-            // Picks up a workout the Coach chat's "Build Workout" button just
-            // created, since that sets AppState.activeWorkout rather than this
-            // view's own local state.
-            if workout == nil, let active = appState.activeWorkout {
-                workout = active
-                completedExerciseIds = []
-                loggedSets = []
-                companionComment = nil
-                report = nil
-                loadPersonalBests()
-            }
-        }
+        .onAppear { syncIfNewWorkout() }
+        .onChange(of: sessionManager.workout?.id) { _, _ in syncIfNewWorkout() }
+    }
+
+    /// A workout becoming active — from this view's own Generate, from
+    /// Coach chat's Build Workout, or from "Repeat This Workout" — always
+    /// needs the same two things done once: reset this view's own
+    /// companion-comment/report/error state, and load a fresh
+    /// personal-bests baseline to check future sets against. Runs at most
+    /// once per workout id, whether this view was already open when the
+    /// workout started or just appeared afterward.
+    private func syncIfNewWorkout() {
+        guard sessionManager.workout?.id != syncedWorkoutId else { return }
+        syncedWorkoutId = sessionManager.workout?.id
+        companionComment = nil
+        report = nil
+        errorMessage = nil
+        guard sessionManager.workout != nil, let userId = appState.userId else { return }
+        Task { await sessionManager.loadPersonalBests(userId: userId) }
     }
 
     // MARK: - Voice Mode
@@ -232,7 +243,7 @@ struct WorkoutTabView: View {
                 let result = try await KaiEngine.shared.interpretWorkoutVoiceCommand(
                     userId: userId,
                     transcript: command,
-                    state: currentVoiceState()
+                    state: sessionManager.currentContext()
                 )
                 switch result.action {
                 case .logSet:
@@ -285,113 +296,32 @@ struct WorkoutTabView: View {
 
     // MARK: - Voice Commands
 
-    private var currentExercise: WorkoutExercise? {
-        workout?.exercises.first { !completedExerciseIds.contains($0.id) }
-    }
-
-    private func sets(for exerciseId: UUID) -> [LoggedSet] {
-        loggedSets.filter { $0.exerciseId == exerciseId }.sorted { $0.setNumber < $1.setNumber }
-    }
-
-    /// A compact snapshot of where things stand, handed to Claude so it can
-    /// resolve "same as previous" / "what's next" / "how am I doing" against
-    /// real state instead of guessing.
-    private func currentVoiceState() -> WorkoutVoiceState {
-        let totalExercises = workout?.exercises.count ?? 0
-
-        guard let exercise = currentExercise else {
-            return WorkoutVoiceState(
-                currentExerciseName: nil,
-                currentExercisePrescription: nil,
-                setsLoggedForCurrent: 0,
-                totalSetsForCurrent: nil,
-                lastLoggedSetDescription: nil,
-                remainingExerciseNames: [],
-                totalExercises: totalExercises,
-                completedExercises: completedExerciseIds.count
-            )
-        }
-
-        let existing = sets(for: exercise.id)
-        let remaining = workout?.exercises
-            .filter { $0.id != exercise.id && !completedExerciseIds.contains($0.id) }
-            .map(\.name) ?? []
-
-        return WorkoutVoiceState(
-            currentExerciseName: exercise.name,
-            currentExercisePrescription: "\(exercise.sets) sets of \(exercise.reps)",
-            setsLoggedForCurrent: existing.count,
-            totalSetsForCurrent: exercise.sets,
-            lastLoggedSetDescription: existing.last.map(describe),
-            remainingExerciseNames: remaining,
-            totalExercises: totalExercises,
-            completedExercises: completedExerciseIds.count
-        )
-    }
-
-    private func describe(_ set: LoggedSet) -> String {
-        var text = ""
-        if let weight = set.weightValue, let unit = set.weightUnit {
-            text = "\(formatted(weight)) \(unit.spokenName)"
-        }
-        if let reps = set.reps {
-            text += text.isEmpty ? "\(reps) reps" : ", \(reps) reps"
-        }
-        return text.isEmpty ? "no weight or reps recorded" : text
-    }
-
-    /// Applies the structured decision to actual state — this is normal app
-    /// logic reacting to a parsed command, the same as any voice-assistant
-    /// integration, not a return to pattern matching (the understanding
-    /// itself happened in interpretWorkoutVoiceCommand). "Same as previous"
-    /// and the prescribed-weight fallback are resolved here rather than
-    /// trusted blind from the model, since this is the data that gets saved.
+    /// Applies the structured decision via WorkoutSessionManager — the
+    /// resolution logic itself ("same as previous," the prescribed-weight
+    /// fallback, marking the exercise complete on the last set) lives
+    /// there now, shared with manual entry and, eventually, Coach chat's
+    /// log_set. This is just the voice-specific reaction to the outcome:
+    /// speaking a confirmation, starting the rest timer, checking for a PR.
     private func applyLogSet(_ result: WorkoutVoiceCommandResult) {
-        guard let exercise = currentExercise else {
+        guard let outcome = sessionManager.logNextSet(
+            weightValue: result.weightValue,
+            weightUnit: result.weightUnit,
+            reps: result.reps,
+            sameAsPrevious: result.sameAsPrevious
+        ) else {
             speak("You've already finished every exercise in this workout.")
             return
         }
 
-        let existing = sets(for: exercise.id)
-        let setNumber = existing.count + 1
-
-        var weightValue = result.weightValue
-        var weightUnit = result.weightUnit
-        var reps = result.reps
-
-        if result.sameAsPrevious, let last = existing.last {
-            weightValue = weightValue ?? last.weightValue
-            weightUnit = weightUnit ?? last.weightUnit
-            reps = reps ?? last.reps
+        if outcome.exerciseJustCompleted {
+            fetchCompanionComment(for: outcome.exercise)
         }
-        if weightValue == nil, let prescribed = exercise.weightKg {
-            weightValue = prescribed
-            weightUnit = .kg
+        if let weightValue = outcome.weightValue, let weightUnit = outcome.weightUnit, let reps = outcome.reps {
+            checkForPR(exerciseName: outcome.exercise.name, weight: weightValue, unit: weightUnit, reps: reps)
         }
+        startRestTimer(seconds: outcome.restSecs ?? outcome.exercise.restSecs)
 
-        loggedSets.append(LoggedSet(
-            exerciseId: exercise.id,
-            setNumber: setNumber,
-            weightValue: weightValue,
-            weightUnit: weightUnit,
-            reps: reps
-        ))
-
-        if setNumber >= exercise.sets {
-            completedExerciseIds.insert(exercise.id)
-            fetchCompanionComment(for: exercise)
-        }
-
-        if let weightValue, let weightUnit, let reps {
-            checkForPR(exerciseName: exercise.name, weight: weightValue, unit: weightUnit, reps: reps)
-        }
-        startRestTimer(seconds: exercise.restSecs)
-
-        speak(result.spokenReply.isEmpty ? "Set \(setNumber) logged for \(exercise.name)." : result.spokenReply)
-    }
-
-    private func formatted(_ value: Double) -> String {
-        value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(format: "%.1f", value)
+        speak(result.spokenReply.isEmpty ? "Set \(outcome.setNumber) logged for \(outcome.exercise.name)." : result.spokenReply)
     }
 
     // MARK: - Empty State
@@ -440,8 +370,8 @@ struct WorkoutTabView: View {
                 ForEach(workout.exercises) { exercise in
                     ExerciseRow(
                         exercise: exercise,
-                        isCompleted: completedExerciseIds.contains(exercise.id),
-                        loggedSets: sets(for: exercise.id),
+                        isCompleted: sessionManager.completedExerciseIds.contains(exercise.id),
+                        loggedSets: sessionManager.sets(for: exercise.id),
                         onToggle: { toggle(exercise) },
                         onLogSet: { setNumber, weight, unit, reps, restSecs in
                             logSet(
@@ -454,7 +384,7 @@ struct WorkoutTabView: View {
                     )
                 }
 
-                if !didSaveSession {
+                if !sessionManager.isFinished {
                     ForzeeTextButton(title: "+ Add Exercise", action: { showAddExercise = true })
                 }
             }
@@ -477,7 +407,7 @@ struct WorkoutTabView: View {
                     .transition(.opacity)
             }
 
-            if didSaveSession {
+            if sessionManager.isFinished {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.fzGreen)
                     Text("Session saved")
@@ -502,7 +432,7 @@ struct WorkoutTabView: View {
                 ForzeeButton(
                     title: "Finish Workout",
                     action: finishOrGuard,
-                    isDisabled: completedExerciseIds.isEmpty
+                    isDisabled: sessionManager.completedExerciseIds.isEmpty
                 )
                 ForzeeTextButton(title: "Discard & Start Over", action: discardOrGuard)
             }
@@ -519,18 +449,16 @@ struct WorkoutTabView: View {
     // MARK: - Actions
 
     private func toggle(_ exercise: WorkoutExercise) {
-        let wasCompleted = completedExerciseIds.contains(exercise.id)
-        if wasCompleted {
-            completedExerciseIds.remove(exercise.id)
-        } else {
-            completedExerciseIds.insert(exercise.id)
+        if sessionManager.toggleExerciseComplete(exercise.id) {
             fetchCompanionComment(for: exercise)
         }
     }
 
     /// Manual per-set entry from ExerciseRow's expanded editor — the tap
-    /// alternative to voice logging. Upserts by (exercise, setNumber) so
-    /// editing an already-logged set overwrites it rather than duplicating.
+    /// alternative to voice logging. The upsert-by-(exercise, setNumber)
+    /// and complete-on-last-set logic both live in WorkoutSessionManager
+    /// now, shared with voice's applyLogSet; this just reacts to the
+    /// outcome the same way applyLogSet does, minus the spoken confirmation.
     private func logSet(
         exercise: WorkoutExercise,
         setNumber: Int,
@@ -539,28 +467,14 @@ struct WorkoutTabView: View {
         reps: Int?,
         restSecs: Int?
     ) {
-        if let index = loggedSets.firstIndex(where: { $0.exerciseId == exercise.id && $0.setNumber == setNumber }) {
-            loggedSets[index].weightValue = weight
-            loggedSets[index].weightUnit = weight == nil ? nil : unit
-            loggedSets[index].reps = reps
-            loggedSets[index].restSecs = restSecs
-        } else {
-            loggedSets.append(LoggedSet(
-                exerciseId: exercise.id,
-                setNumber: setNumber,
-                weightValue: weight,
-                weightUnit: weight == nil ? nil : unit,
-                reps: reps,
-                restSecs: restSecs
-            ))
-        }
+        guard let outcome = sessionManager.logSet(
+            exerciseId: exercise.id, setNumber: setNumber,
+            weight: weight, unit: unit, reps: reps, restSecs: restSecs
+        ) else { return }
 
-        let alreadyCompleted = completedExerciseIds.contains(exercise.id)
-        if !alreadyCompleted, sets(for: exercise.id).count >= exercise.sets {
-            completedExerciseIds.insert(exercise.id)
+        if outcome.exerciseJustCompleted {
             fetchCompanionComment(for: exercise)
         }
-
         if let weight, let reps {
             checkForPR(exerciseName: exercise.name, weight: weight, unit: unit, reps: reps)
         }
@@ -568,15 +482,13 @@ struct WorkoutTabView: View {
     }
 
     private func removeSet(exercise: WorkoutExercise, setNumber: Int) {
-        loggedSets.removeAll { $0.exerciseId == exercise.id && $0.setNumber == setNumber }
-        completedExerciseIds.remove(exercise.id)
+        sessionManager.removeSet(exerciseId: exercise.id, setNumber: setNumber)
     }
 
     // MARK: - Add Exercise
 
     private func addExercise(_ exercise: WorkoutExercise) {
-        workout?.exercises.append(exercise)
-        appState.activeWorkout?.exercises.append(exercise)
+        sessionManager.addExercise(exercise)
     }
 
     // MARK: - Rest Timer
@@ -595,38 +507,16 @@ struct WorkoutTabView: View {
 
     // MARK: - PR Detection
 
-    /// Compares a freshly logged set against `personalBests` — a frozen
-    /// snapshot loaded once when the workout became active (see
-    /// loadPersonalBests) — so this can only ever fire against what was
-    /// already true walking in, never against something logged minutes
-    /// earlier in the same session.
+    /// The comparison itself lives in WorkoutSessionManager, against the
+    /// frozen personalBests baseline it loads once per session; this is
+    /// only the "show a toast, then fade it out" UI reaction to a true result.
     private func checkForPR(exerciseName: String, weight: Double, unit: WeightUnit, reps: Int) {
-        guard weight > 0, reps > 0, let best = personalBests[exerciseName] else { return }
-        let weightKg = kgValue(weight, unit: unit)
-        let isPR = weightKg > best.weightKg || (weightKg == best.weightKg && reps > best.reps)
-        guard isPR else { return }
+        guard sessionManager.isPersonalRecord(exerciseName: exerciseName, weight: weight, unit: unit, reps: reps) else { return }
 
         withAnimation { prAnnouncement = "New PR on \(exerciseName)!" }
         Task {
             try? await Task.sleep(for: .seconds(4))
             withAnimation { prAnnouncement = nil }
-        }
-    }
-
-    private func kgValue(_ value: Double, unit: WeightUnit) -> Double {
-        unit == .kg ? value : value * 0.45359237
-    }
-
-    /// Loaded once per workout — a wide-enough history window (limit: 200)
-    /// to have a real shot at every exercise's true best. Deliberately not
-    /// refreshed as sets get logged this session; see checkForPR.
-    private func loadPersonalBests() {
-        guard let userId = appState.userId else { return }
-        Task {
-            guard let sessions = try? await ForzeeDataService.shared.fetchSessionHistory(userId: userId, limit: 200) else {
-                return
-            }
-            personalBests = InsightsEngine.personalBests(sessions: sessions)
         }
     }
 
@@ -653,14 +543,8 @@ struct WorkoutTabView: View {
         Task {
             defer { isGenerating = false }
             do {
-                workout = try await KaiEngine.shared.generateWorkout(userId: userId)
-                appState.activeWorkout = workout
-                appState.isRepeatWorkout = false
-                completedExerciseIds = []
-                loggedSets = []
-                companionComment = nil
-                report = nil
-                loadPersonalBests()
+                let workout = try await KaiEngine.shared.generateWorkout(userId: userId)
+                sessionManager.start(workout)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -670,34 +554,24 @@ struct WorkoutTabView: View {
     /// The final save. Always succeeds locally regardless of connectivity
     /// (see SyncManager) — that's what "Session saved" reflects, immediately,
     /// before the AI report (which does need a live network call) resolves.
-    private func saveSession(_ workout: GeneratedWorkout, feedback: SessionFeedback) async {
+    private func saveSession(feedback: SessionFeedback) async {
         guard let userId = appState.userId else { return }
         isSavingSession = true
 
-        let completedNames = workout.exercises
-            .filter { completedExerciseIds.contains($0.id) }
-            .map(\.name)
-
-        try? await ForzeeDataService.shared.saveCompletedWorkout(
-            workout,
-            completedExerciseIds: completedExerciseIds,
-            loggedSets: loggedSets,
-            feedback: feedback,
-            userId: userId,
-            isRepeat: appState.isRepeatWorkout
-        )
+        guard let finished = try? await sessionManager.finish(userId: userId, feedback: feedback) else {
+            isSavingSession = false
+            errorMessage = "Couldn't save this session — try again."
+            return
+        }
 
         isSavingSession = false
         showFeedbackSheet = false
-        didSaveSession = true
-        appState.activeWorkout = nil  // completed — no longer "active"
-        appState.isRepeatWorkout = false
 
         do {
             report = try await KaiEngine.shared.generateWorkoutReport(
                 userId: userId,
-                workout: workout,
-                completedExerciseNames: completedNames
+                workout: finished.workout,
+                completedExerciseNames: finished.completedExerciseNames
             )
         } catch {
             report = "Workout logged. (Report unavailable: \(error.localizedDescription))"
@@ -711,7 +585,7 @@ struct WorkoutTabView: View {
     /// through the same guard rather than trusting completedExerciseIds
     /// alone to mean "there's something here."
     private func finishOrGuard() {
-        if loggedSets.isEmpty {
+        if sessionManager.loggedSets.isEmpty {
             showEmptySessionGuard = true
         } else {
             showFeedbackSheet = true
@@ -719,7 +593,7 @@ struct WorkoutTabView: View {
     }
 
     private func discardOrGuard() {
-        if loggedSets.isEmpty {
+        if sessionManager.loggedSets.isEmpty {
             showEmptySessionGuard = true
         } else {
             reset()
@@ -727,17 +601,12 @@ struct WorkoutTabView: View {
     }
 
     private func reset() {
-        workout = nil
-        appState.activeWorkout = nil
-        appState.isRepeatWorkout = false
-        completedExerciseIds = []
-        loggedSets = []
+        sessionManager.discard()
         companionComment = nil
         report = nil
-        didSaveSession = false
         errorMessage = nil
-        personalBests = [:]
         prAnnouncement = nil
+        syncedWorkoutId = nil
         cancelRestTimer()
     }
 }

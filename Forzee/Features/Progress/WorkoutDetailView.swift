@@ -9,9 +9,10 @@
 // history rows.
 //
 // "Repeat This Workout" is the other half of the mechanism: it
-// reuses the same workout row (via AppState.isRepeatWorkout) rather
-// than generating a new one, which is what lets a real times-used
-// count exist at all — see ForzeeDataService.saveCompletedWorkout.
+// reuses the same workout row (via WorkoutSessionManager's isRepeat
+// flag) rather than generating a new one, which is what lets a real
+// times-used count exist at all — see
+// ForzeeDataService.saveCompletedWorkout.
 // ============================================================
 
 import SwiftUI
@@ -145,7 +146,7 @@ struct WorkoutDetailView: View {
               let info = latest?.workout,
               let exercises = info.exercises else { return }
 
-        appState.activeWorkout = GeneratedWorkout(
+        let workout = GeneratedWorkout(
             id: workoutUUID,
             name: info.name,
             workoutType: info.workoutType,
@@ -153,7 +154,7 @@ struct WorkoutDetailView: View {
             exercises: exercises,
             generatedAt: info.generatedAt ?? .now
         )
-        appState.isRepeatWorkout = true
+        WorkoutSessionManager.shared.start(workout, isRepeat: true)
         appState.activeTab = .workout
         dismiss()
     }

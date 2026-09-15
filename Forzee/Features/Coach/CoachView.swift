@@ -173,17 +173,17 @@ struct CoachView: View {
 
     /// Runs a CoachAction the user tapped — CoachActionExecutor (the
     /// domain layer) has the final say on whether it's actually
-    /// permitted and does the real work. build_workout hands AppState a
-    /// real workout (no second LLM call — the response already carries
-    /// the full workout block); replace_exercise instead mutates that
-    /// SAME message's own workout block, so this re-stores the updated
-    /// CoachResponse against the message it came from and the bubble
-    /// re-renders with the swap already applied.
+    /// permitted and does the real work. build_workout starts a real
+    /// session in WorkoutSessionManager (no second LLM call — the
+    /// response already carries the full workout block); replace_exercise
+    /// instead mutates that SAME message's own workout block, so this
+    /// re-stores the updated CoachResponse against the message it came
+    /// from and the bubble re-renders with the swap already applied.
     private func runAction(_ action: CoachAction, in response: CoachResponse, messageId: UUID) {
         executingActionMessageId = messageId
         defer { executingActionMessageId = nil }
 
-        switch CoachActionExecutor.execute(action, from: response, appState: appState) {
+        switch CoachActionExecutor.execute(action, from: response) {
         case .builtWorkout(let workout):
             actionConfirmations[messageId] = "Added \"\(workout.name)\" (\(workout.exercises.count) exercises) to your Workout tab."
         case .updatedResponse(let updated):

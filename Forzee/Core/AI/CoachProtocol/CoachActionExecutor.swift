@@ -13,12 +13,13 @@
 
 import Foundation
 
-/// What running an action actually did — a build_workout hands AppState a
-/// real GeneratedWorkout (nothing about the chat message itself changes);
-/// a replace_exercise instead mutates the SAME message's own workout
-/// block, so the caller needs the updated CoachResponse back to re-store
-/// against that message. `.none` covers "not permitted" and "not
-/// implemented" alike — the caller doesn't need to tell those apart.
+/// What running an action actually did — a build_workout starts a real
+/// GeneratedWorkout session in WorkoutSessionManager (nothing about the
+/// chat message itself changes); a replace_exercise instead mutates the
+/// SAME message's own workout block, so the caller needs the updated
+/// CoachResponse back to re-store against that message. `.none` covers
+/// "not permitted" and "not implemented" alike — the caller doesn't need
+/// to tell those apart.
 enum CoachActionOutcome {
     case builtWorkout(GeneratedWorkout)
     case updatedResponse(CoachResponse)
@@ -28,12 +29,12 @@ enum CoachActionOutcome {
 @MainActor
 enum CoachActionExecutor {
 
-    static func execute(_ action: CoachAction, from response: CoachResponse, appState: AppState) -> CoachActionOutcome {
+    static func execute(_ action: CoachAction, from response: CoachResponse) -> CoachActionOutcome {
         guard CoachResponseValidator.isPermitted(action, in: response.blocks) else { return .none }
 
         switch action.type {
         case .buildWorkout:
-            return buildWorkout(from: response, appState: appState)
+            return buildWorkout(from: response)
         case .replaceExercise:
             return replaceExercise(action, in: response)
         case .startWorkout, .modifyWorkout, .logSet, .skipExercise,
@@ -46,16 +47,16 @@ enum CoachActionExecutor {
     }
 
     /// Converts the SAME workout block already rendered in this response
-    /// into a real GeneratedWorkout via WorkoutBuilder, and hands it to
-    /// AppState exactly like the Workout tab's own Generate button
-    /// already does. No second LLM call needed: the structured block IS
-    /// the proposal, nothing needs re-extracting from prose the way the
-    /// old chat-based "Build Workout" flow had to.
-    private static func buildWorkout(from response: CoachResponse, appState: AppState) -> CoachActionOutcome {
+    /// into a real GeneratedWorkout via WorkoutBuilder, and starts it in
+    /// WorkoutSessionManager exactly like the Workout tab's own Generate
+    /// button already does — so either path lands the user on the same
+    /// in-progress session. No second LLM call needed: the structured
+    /// block IS the proposal, nothing needs re-extracting from prose the
+    /// way the old chat-based "Build Workout" flow had to.
+    private static func buildWorkout(from response: CoachResponse) -> CoachActionOutcome {
         guard let workoutBlock = firstWorkoutBlock(in: response.blocks) else { return .none }
         let workout = WorkoutBuilder.build(from: workoutBlock.workout)
-        appState.activeWorkout = workout
-        appState.isRepeatWorkout = false
+        WorkoutSessionManager.shared.start(workout)
         return .builtWorkout(workout)
     }
 
