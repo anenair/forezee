@@ -219,7 +219,7 @@ final class ClaudeAPIClient {
         systemPrompt: String,
         messages: [KaiMessage],
         tool: ClaudeTool,
-        maxTokens: Int = 4096,
+        maxTokens: Int = 8192,
         onPartialJSON: @escaping (String) -> Void
     ) async throws -> [String: Any] {
         guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
