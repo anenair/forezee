@@ -19,6 +19,10 @@ import Foundation
 enum KaiSystemPrompt {
 
     /// Build the full system prompt, injecting the user's context snapshot.
+    /// @MainActor only because of `currentWorkoutSession`, which reads
+    /// WorkoutSessionManager — every caller (KaiEngine) is already on the
+    /// main actor, so this adds no new isolation hops.
+    @MainActor
     static func build(context: UserContextSnapshot) -> String {
         return """
         \(identity)
@@ -31,7 +35,35 @@ enum KaiSystemPrompt {
 
         \(userContext(context))
 
+        \(currentWorkoutSession)
+
         \(rules)
+        """
+    }
+
+    // MARK: - Current Workout Session
+
+    /// Empty when nothing is in progress — WorkoutSessionManager is the
+    /// single source of "what's happening in the Workout tab right now"
+    /// (see Core/Workout/WorkoutSessionManager.swift), and this is what
+    /// lets Coach chat's log_set action resolve "log that set" against a
+    /// real current exercise instead of asking the user to repeat
+    /// themselves. Reuses the exact snapshot format WorkoutTabView's own
+    /// voice mode already sends Claude — same shape, same wording, now
+    /// available in Coach chat too.
+    @MainActor
+    private static var currentWorkoutSession: String {
+        guard WorkoutSessionManager.shared.isActive else { return "" }
+        return """
+        ## Current Workout Session
+
+        The user has a workout in progress right now, visible in their Workout tab. If they mention a \
+        set, reps, or weight — or say "same as last time" — without naming an exercise, they mean the \
+        CURRENT exercise below; resolve it against this real state instead of asking them to repeat \
+        themselves or naming a different exercise. Attach a `log_set` action (see Structured Replies) \
+        only once they've actually given you a real number or explicitly said to reuse the previous set.
+
+        \(WorkoutVoiceCommandPrompt.stateBlock(WorkoutSessionManager.shared.currentContext()))
         """
     }
 
@@ -211,6 +243,15 @@ enum KaiSystemPrompt {
       `payload.exerciseName` matching an exercise already in a workout block here and
       `payload.replacementName` set to what it becomes. Every other action type doesn't do
       anything in the app yet — don't include one.
+    - Attach a `log_set` action only when a "Current Workout Session" section appears above (no
+      section there means nothing is in progress — there's nothing to log into, so don't offer
+      to). It always logs against the CURRENT exercise named in that section, never a different
+      one — if the user names a specific exercise that isn't the current one, ask in a `text`
+      block instead of guessing what they mean. Set `payload.reps` to the real rep count they
+      gave you, and `payload.weight`/`payload.weightUnit` if they gave a weight (omit both for
+      bodyweight) — or set `payload.sameAsPrevious` to `"true"` if they said to reuse the last
+      set instead of restating numbers. Never attach `log_set` from a bare "log that" with no
+      number and no "same as before" — ask what they actually did first.
     Order blocks the way you'd naturally say them (e.g. a short text block first, then the
     workout, then a coaching_note) — the app renders them in the order you give.
 

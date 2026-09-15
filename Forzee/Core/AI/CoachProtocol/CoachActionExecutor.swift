@@ -17,12 +17,14 @@ import Foundation
 /// GeneratedWorkout session in WorkoutSessionManager (nothing about the
 /// chat message itself changes); a replace_exercise instead mutates the
 /// SAME message's own workout block, so the caller needs the updated
-/// CoachResponse back to re-store against that message. `.none` covers
-/// "not permitted" and "not implemented" alike — the caller doesn't need
-/// to tell those apart.
+/// CoachResponse back to re-store against that message; a log_set writes
+/// a real set into whatever session is active, same as WorkoutTabView's
+/// own manual entry or voice mode would. `.none` covers "not permitted"
+/// and "not implemented" alike — the caller doesn't need to tell those apart.
 enum CoachActionOutcome {
     case builtWorkout(GeneratedWorkout)
     case updatedResponse(CoachResponse)
+    case loggedSet(LogSetOutcome)
     case none
 }
 
@@ -37,7 +39,9 @@ enum CoachActionExecutor {
             return buildWorkout(from: response)
         case .replaceExercise:
             return replaceExercise(action, in: response)
-        case .startWorkout, .modifyWorkout, .logSet, .skipExercise,
+        case .logSet:
+            return logSet(action)
+        case .startWorkout, .modifyWorkout, .skipExercise,
              .startTimer, .finishWorkout, .showExercise, .viewProgress, .unknown:
             // isPermitted already excludes all of these — unreachable in
             // practice, kept explicit rather than a `default:` so adding a
@@ -100,6 +104,31 @@ enum CoachActionExecutor {
             metadata: response.metadata
         )
         return .updatedResponse(updated)
+    }
+
+    /// Logs a real set into whatever session WorkoutSessionManager already
+    /// has active — always against the CURRENT exercise (isPermitted
+    /// already confirmed a session exists), never a named one. Uses the
+    /// exact same logNextSet resolution ("same as previous," the
+    /// prescribed-weight fallback, marking the exercise complete on the
+    /// last set) that WorkoutTabView's own voice mode already relies on —
+    /// this is genuinely the same operation, just triggered from Coach
+    /// chat instead of a mic.
+    private static func logSet(_ action: CoachAction) -> CoachActionOutcome {
+        let payload = action.payload ?? [:]
+        let reps = payload["reps"].flatMap(Int.init)
+        let weightValue = payload["weight"].flatMap(Double.init)
+        let weightUnit: WeightUnit? = weightValue == nil ? nil : (payload["weightUnit"].flatMap(WeightUnit.init(rawValue:)) ?? .lbs)
+        let sameAsPrevious = payload["sameAsPrevious"] == "true"
+
+        guard let outcome = WorkoutSessionManager.shared.logNextSet(
+            weightValue: weightValue,
+            weightUnit: weightUnit,
+            reps: reps,
+            sameAsPrevious: sameAsPrevious
+        ) else { return .none }
+
+        return .loggedSet(outcome)
     }
 
     private static func firstWorkoutBlock(in blocks: [CoachBlock]) -> WorkoutBlock? {

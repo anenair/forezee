@@ -21,6 +21,7 @@
 
 import Foundation
 
+@MainActor
 enum CoachResponseValidator {
 
     // MARK: - Limits
@@ -141,7 +142,17 @@ enum CoachResponseValidator {
                     $0.name.caseInsensitiveCompare(exerciseName) == .orderedSame
                 }
             }
-        case .startWorkout, .modifyWorkout, .logSet, .skipExercise,
+        case .logSet:
+            // Only when a real session is actually in progress (Coach chat
+            // has no session of its own to log into otherwise), and only
+            // when the model gave a real rep count or explicitly asked to
+            // reuse the previous set — never a bare, numberless action that
+            // would leave WorkoutSessionManager to guess.
+            guard WorkoutSessionManager.shared.isActive else { return false }
+            let hasReps = (action.payload?["reps"]).flatMap(Int.init).map { $0 > 0 } ?? false
+            let reusesPrevious = action.payload?["sameAsPrevious"] == "true"
+            return hasReps || reusesPrevious
+        case .startWorkout, .modifyWorkout, .skipExercise,
              .startTimer, .finishWorkout, .showExercise, .viewProgress:
             // Not implemented yet — see CoachActionExecutor. Permitting an
             // action the executor can't run would render a dead button.

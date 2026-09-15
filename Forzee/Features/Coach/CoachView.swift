@@ -178,7 +178,8 @@ struct CoachView: View {
     /// response already carries the full workout block); replace_exercise
     /// instead mutates that SAME message's own workout block, so this
     /// re-stores the updated CoachResponse against the message it came
-    /// from and the bubble re-renders with the swap already applied.
+    /// from and the bubble re-renders with the swap already applied;
+    /// log_set writes a real set into whatever session is already active.
     private func runAction(_ action: CoachAction, in response: CoachResponse, messageId: UUID) {
         executingActionMessageId = messageId
         defer { executingActionMessageId = nil }
@@ -201,9 +202,27 @@ struct CoachView: View {
                 id: messageId, role: .assistant, content: updated.encodedContent(),
                 createdAt: messages[index].createdAt
             )
+        case .loggedSet(let outcome):
+            actionConfirmations[messageId] = "Logged set \(outcome.setNumber) for \(outcome.exercise.name)\(loggedSetSummary(outcome))."
         case .none:
             break
         }
+    }
+
+    /// " — 135 lbs × 8" style suffix for the log_set confirmation, omitting
+    /// whatever the set didn't actually carry (a bodyweight set has no
+    /// weight; a rep-less hold wouldn't have reps) rather than printing a
+    /// blank or a zero.
+    private func loggedSetSummary(_ outcome: LogSetOutcome) -> String {
+        var parts: [String] = []
+        if let weight = outcome.weightValue, let unit = outcome.weightUnit {
+            let text = weight.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(weight)) : String(format: "%.1f", weight)
+            parts.append("\(text) \(unit.rawValue)")
+        }
+        if let reps = outcome.reps {
+            parts.append("\(reps) reps")
+        }
+        return parts.isEmpty ? "" : " — " + parts.joined(separator: " × ")
     }
 
     // MARK: - Scrolling
