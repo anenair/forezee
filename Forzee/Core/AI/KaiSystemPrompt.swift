@@ -9,7 +9,9 @@
 // entire character is defined here through prompt engineering.
 //
 // The system prompt is:
-//   1. Cached (never resent as raw tokens after first call)
+//   1. Split into layers by how often each one changes, so the static
+//      majority of it is actually cacheable (see buildLayered below and
+//      SystemPrompt in ClaudeAPIClient.swift for the cache_control wiring)
 //   2. Personalised per call via the context snapshot injection
 //   3. The single source of truth for who Kai is
 // ============================================================
@@ -18,27 +20,33 @@ import Foundation
 
 enum KaiSystemPrompt {
 
-    /// Build the full system prompt, injecting the user's context snapshot.
-    /// @MainActor only because of `currentWorkoutSession`, which reads
-    /// WorkoutSessionManager — every caller (KaiEngine) is already on the
-    /// main actor, so this adds no new isolation hops.
+    /// The three layers Claude actually sees, split by how often each one
+    /// changes rather than concatenated into one string — see
+    /// `SystemPrompt.layered` (ClaudeAPIClient.swift) for how this becomes
+    /// `cache_control` breakpoints. The old flat `build(context:)` buried
+    /// the volatile layer in the *middle* of the prompt, ahead of the huge
+    /// static Rules/Structured-Replies section — which meant nothing after
+    /// it could ever be a cache hit, on any call, ever. Splitting these
+    /// apart (and keeping volatile genuinely last) is the actual fix;
+    /// adding a `cache_control` marker alone would have done nothing.
+    struct LayeredSystemPrompt {
+        let global: String     // identical for every user, every call
+        let perUser: String    // changes only when the user edits Settings
+        let volatile: String   // changes every call — time, live signals, chat summary, live workout
+    }
+
+    /// Build the layered system prompt, injecting the user's context
+    /// snapshot into the volatile layer only. @MainActor only because of
+    /// `currentWorkoutSession`, which reads WorkoutSessionManager — every
+    /// caller (KaiEngine) is already on the main actor, so this adds no
+    /// new isolation hops.
     @MainActor
-    static func build(context: UserContextSnapshot) -> String {
-        return """
-        \(identity)
-
-        \(coachingPhilosophy)
-
-        \(toneGuide(for: context.user.level))
-
-        \(coachModeGuide(for: context.user.coachMode))
-
-        \(userContext(context))
-
-        \(currentWorkoutSession)
-
-        \(rules)
-        """
+    static func buildLayered(context: UserContextSnapshot) -> LayeredSystemPrompt {
+        LayeredSystemPrompt(
+            global: [identity, coachingPhilosophy, rules].joined(separator: "\n\n"),
+            perUser: [toneGuide(for: context.user.level), coachModeGuide(for: context.user.coachMode)].joined(separator: "\n\n"),
+            volatile: [userContext(context), currentWorkoutSession].joined(separator: "\n\n")
+        )
     }
 
     // MARK: - Current Workout Session

@@ -11,6 +11,64 @@
 
 import Foundation
 
+// MARK: - SystemPrompt
+
+/// A system prompt as one or more cache-aware text blocks. Anthropic's
+/// prompt cache is a byte-prefix match over `tools` -> `system` ->
+/// `messages`, in that render order — a `cache_control` marker on the LAST
+/// block of `system` also covers every tool definition before it, so tools
+/// never need their own marker as long as the tool list stays deterministic
+/// per call site.
+struct SystemPrompt {
+    enum CacheControl {
+        case none
+        case ephemeral         // default 5-minute TTL
+        case ephemeralOneHour  // explicit 1-hour TTL — worth the 2x write premium only when reused often enough to pay it back (see shared/prompt-caching.md)
+
+        var jsonValue: [String: Any]? {
+            switch self {
+            case .none: return nil
+            case .ephemeral: return ["type": "ephemeral"]
+            case .ephemeralOneHour: return ["type": "ephemeral", "ttl": "1h"]
+            }
+        }
+    }
+
+    struct Block {
+        let text: String
+        let cache: CacheControl
+    }
+
+    let blocks: [Block]
+
+    /// A single block, no caching — for prompts too small or too one-off to
+    /// bother (e.g. the identity-only gym companion comment).
+    static func plain(_ text: String) -> SystemPrompt {
+        SystemPrompt(blocks: [Block(text: text, cache: .none)])
+    }
+
+    /// The three-layer shape every Kai call with a context snapshot uses:
+    /// global static text (identical for every user, cached for an hour),
+    /// per-user text (changes only in Settings, cached for 5 minutes), then
+    /// the live context last, never cached. See KaiSystemPrompt.buildLayered.
+    static func layered(_ prompt: KaiSystemPrompt.LayeredSystemPrompt) -> SystemPrompt {
+        SystemPrompt(blocks: [
+            Block(text: prompt.global, cache: .ephemeralOneHour),
+            Block(text: prompt.perUser, cache: .ephemeral),
+            Block(text: prompt.volatile, cache: .none),
+        ])
+    }
+
+    /// The exact JSON value for the request body's `system` field.
+    var jsonValue: [[String: Any]] {
+        blocks.map { block in
+            var dict: [String: Any] = ["type": "text", "text": block.text]
+            if let cache = block.cache.jsonValue { dict["cache_control"] = cache }
+            return dict
+        }
+    }
+}
+
 final class ClaudeAPIClient {
 
     // MARK: - Configuration
@@ -36,7 +94,7 @@ final class ClaudeAPIClient {
     /// Returns the full assembled response string when the stream ends.
     func streamCompletion(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         onToken: @escaping (String) -> Void
     ) async throws -> String {
@@ -65,6 +123,10 @@ final class ClaudeAPIClient {
             let json = String(line.dropFirst(6))
             guard json != "[DONE]" else { break }
 
+            #if DEBUG
+            Self.logCacheUsageIfMessageStart(json)
+            #endif
+
             if let token = parseStreamToken(json) {
                 fullResponse += token
                 await MainActor.run { onToken(token) }
@@ -79,7 +141,7 @@ final class ClaudeAPIClient {
     /// Request a full, non-streamed completion. Use for structured outputs (e.g. workout JSON).
     func complete(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         userMessage: String
     ) async throws -> String {
         guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
@@ -101,6 +163,10 @@ final class ClaudeAPIClient {
         }
         try validateStatusCode(httpResponse.statusCode)
 
+        #if DEBUG
+        Self.logCacheUsage(from: data)
+        #endif
+
         return try parseNonStreamResponse(data)
     }
 
@@ -112,7 +178,7 @@ final class ClaudeAPIClient {
     /// weight/reps) without falling back to hand-rolled pattern matching.
     func completeWithTool(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         userMessage: String,
         tool: ClaudeTool,
         maxTokens: Int = 300
@@ -130,7 +196,7 @@ final class ClaudeAPIClient {
         let body: [String: Any] = [
             "model": model.rawValue,
             "max_tokens": maxTokens,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": [["role": "user", "content": userMessage]],
             "tools": [[
                 "name": tool.name,
@@ -147,6 +213,10 @@ final class ClaudeAPIClient {
         }
         try validateStatusCode(httpResponse.statusCode)
 
+        #if DEBUG
+        Self.logCacheUsage(from: data)
+        #endif
+
         return try parseToolUseResponse(data, toolName: tool.name)
     }
 
@@ -159,7 +229,7 @@ final class ClaudeAPIClient {
     /// KaiEngine.sendCoachMessage / CoachResponse.tool).
     func completeWithForcedTool(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tool: ClaudeTool,
         maxTokens: Int = 1536
@@ -177,7 +247,7 @@ final class ClaudeAPIClient {
         let body: [String: Any] = [
             "model": model.rawValue,
             "max_tokens": maxTokens,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
             "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
             "tool_choice": ["type": "tool", "name": tool.name],
@@ -189,6 +259,10 @@ final class ClaudeAPIClient {
             throw ClaudeAPIError.invalidResponse
         }
         try validateStatusCode(httpResponse.statusCode)
+
+        #if DEBUG
+        Self.logCacheUsage(from: data)
+        #endif
 
         return try parseToolUseResponse(data, toolName: tool.name)
     }
@@ -216,7 +290,7 @@ final class ClaudeAPIClient {
     /// not a crash, which is exactly the guard this needs.
     func streamCompletionWithForcedTool(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tool: ClaudeTool,
         maxTokens: Int = 8192,
@@ -236,7 +310,7 @@ final class ClaudeAPIClient {
             "model": model.rawValue,
             "max_tokens": maxTokens,
             "stream": true,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
             "tools": [[
                 "name": tool.name,
@@ -259,6 +333,10 @@ final class ClaudeAPIClient {
             guard line.hasPrefix("data: ") else { continue }
             let json = String(line.dropFirst(6))
             guard json != "[DONE]" else { break }
+
+            #if DEBUG
+            Self.logCacheUsageIfMessageStart(json)
+            #endif
 
             if let fragment = parseInputJSONDelta(json) {
                 accumulatedJSON += fragment
@@ -286,7 +364,7 @@ final class ClaudeAPIClient {
     /// that there's nothing worth previewing).
     func streamCompletionWithTools(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tools: [ClaudeTool],
         previewToolName: String,
@@ -307,7 +385,7 @@ final class ClaudeAPIClient {
             "model": model.rawValue,
             "max_tokens": maxTokens,
             "stream": true,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
             "tools": tools.map {
                 ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema, "eager_input_streaming": true]
@@ -341,6 +419,13 @@ final class ClaudeAPIClient {
                   let type = obj["type"] as? String else { continue }
 
             switch type {
+            #if DEBUG
+            case "message_start":
+                if let message = obj["message"] as? [String: Any] {
+                    Self.logCacheUsage(message["usage"] as? [String: Any])
+                }
+            #endif
+
             case "content_block_start":
                 guard let index = obj["index"] as? Int,
                       let block = obj["content_block"] as? [String: Any],
@@ -441,7 +526,7 @@ final class ClaudeAPIClient {
     /// failure, it means none of the candidates fit this message.
     func completeWithTools(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tools: [ClaudeTool],
         maxTokens: Int = 1024
@@ -468,7 +553,7 @@ final class ClaudeAPIClient {
         let body: [String: Any] = [
             "model": model.rawValue,
             "max_tokens": maxTokens,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
             "tools": tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema] },
             "tool_choice": ["type": "auto"],
@@ -480,6 +565,10 @@ final class ClaudeAPIClient {
             throw ClaudeAPIError.invalidResponse
         }
         try validateStatusCode(httpResponse.statusCode)
+
+        #if DEBUG
+        Self.logCacheUsage(from: data)
+        #endif
 
         return try parseToolChoiceResponse(data)
     }
@@ -522,7 +611,7 @@ final class ClaudeAPIClient {
 
     private func buildRequest(
         model: KaiModel,
-        systemPrompt: String,
+        systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         stream: Bool
     ) throws -> URLRequest {
@@ -536,13 +625,46 @@ final class ClaudeAPIClient {
             "model": model.rawValue,
             "max_tokens": 1024,
             "stream": stream,
-            "system": systemPrompt,
+            "system": systemPrompt.jsonValue,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] }
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
+
+    #if DEBUG
+    /// Verifies caching is actually working rather than assuming it from
+    /// code review — cache_read_input_tokens should dominate on any repeat
+    /// call that shares a cached prefix. Never trust the request shape
+    /// alone; a later change to prompt assembly can silently break caching
+    /// while everything keeps working, just at full price.
+    private static func logCacheUsage(_ usage: [String: Any]?) {
+        guard let usage else { return }
+        let read = usage["cache_read_input_tokens"] as? Int ?? 0
+        let write = usage["cache_creation_input_tokens"] as? Int ?? 0
+        let input = usage["input_tokens"] as? Int ?? 0
+        print("🗄️ Claude cache — read: \(read), write: \(write), uncached input: \(input)")
+    }
+
+    /// Non-streaming call sites: pull `usage` straight off the full response body.
+    private static func logCacheUsage(from data: Data) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        logCacheUsage(obj["usage"] as? [String: Any])
+    }
+
+    /// Streaming call sites: cache read/write is decided during input
+    /// processing, before any output token generates, so `message_start`
+    /// already carries the real cache numbers — no need to wait for the
+    /// stream to finish.
+    private static func logCacheUsageIfMessageStart(_ json: String) {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["type"] as? String == "message_start",
+              let message = obj["message"] as? [String: Any] else { return }
+        logCacheUsage(message["usage"] as? [String: Any])
+    }
+    #endif
 
     private func parseStreamToken(_ json: String) -> String? {
         guard let data = json.data(using: .utf8),

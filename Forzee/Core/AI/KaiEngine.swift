@@ -105,7 +105,7 @@ final class KaiEngine: ObservableObject {
 
         let fullResponse = try await apiClient.streamCompletion(
             model: model,
-            systemPrompt: KaiSystemPrompt.build(context: context),
+            systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             messages: messages,
             onToken: onToken
         )
@@ -171,7 +171,7 @@ final class KaiEngine: ObservableObject {
         do {
             let result = try await apiClient.streamCompletionWithTools(
                 model: model,
-                systemPrompt: KaiSystemPrompt.build(context: context),
+                systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
                 messages: messages,
                 tools: tools,
                 previewToolName: CoachResponse.tool.name,
@@ -353,7 +353,7 @@ final class KaiEngine: ObservableObject {
         // 5. Request structured workout JSON
         let response = try await apiClient.complete(
             model: model,
-            systemPrompt: KaiSystemPrompt.build(context: context),
+            systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             userMessage: prompt
         )
 
@@ -383,7 +383,7 @@ final class KaiEngine: ObservableObject {
 
         let response = try await apiClient.complete(
             model: model,
-            systemPrompt: KaiSystemPrompt.build(context: context),
+            systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             userMessage: prompt
         )
 
@@ -411,7 +411,7 @@ final class KaiEngine: ObservableObject {
 
         let response = try await apiClient.complete(
             model: model,
-            systemPrompt: KaiSystemPrompt.identityOnly,
+            systemPrompt: .plain(KaiSystemPrompt.identityOnly),
             userMessage: prompt
         )
 
@@ -550,7 +550,7 @@ final class KaiEngine: ObservableObject {
 
         let input = try await apiClient.completeWithTool(
             model: skill.model,
-            systemPrompt: KaiSystemPrompt.identityOnly,
+            systemPrompt: .plain(KaiSystemPrompt.identityOnly),
             userMessage: prompt,
             tool: skill.tool,
             maxTokens: 1024
@@ -586,7 +586,7 @@ final class KaiEngine: ObservableObject {
         history: [KaiMessage],
         candidateSkills: [Skill]? = nil,
         model: KaiModel = .haiku,
-        systemPrompt: String = KaiSystemPrompt.identityOnly
+        systemPrompt: SystemPrompt = .plain(KaiSystemPrompt.identityOnly)
     ) async throws -> SkillDispatchResult {
         let skills = candidateSkills ?? SkillLoader.shared.skills
         let messages = Array(history.suffix(20)) + [KaiMessage(role: .user, content: message)]
@@ -642,7 +642,7 @@ final class KaiEngine: ObservableObject {
 
         let response = try await apiClient.complete(
             model: model,
-            systemPrompt: KaiSystemPrompt.build(context: context),
+            systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             userMessage: prompt
         )
 
