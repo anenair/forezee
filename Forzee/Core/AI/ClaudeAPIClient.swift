@@ -357,9 +357,17 @@ final class ClaudeAPIClient {
                       let delta = obj["delta"] as? [String: Any],
                       let deltaType = delta["type"] as? String else { continue }
                 if deltaType == "text_delta", let text = delta["text"] as? String {
+                    // Accumulated for the final `.text` fallback below, but
+                    // deliberately NOT previewed live: with tool_choice
+                    // "auto", Claude can emit this as stray prose ahead of
+                    // a forced-schema tool_use block that arrives after it
+                    // and wins (see the tool-call-wins comment below) — a
+                    // live preview of this text would show, then get
+                    // silently swapped out for the tool's own content once
+                    // that block starts streaming. Confirmed in practice:
+                    // a reply that visibly started with one line and then
+                    // "flipped" to a different, contradicting one.
                     blockBuffers[index, default: ""] += text
-                    let fullText = blockBuffers[index] ?? ""
-                    await MainActor.run { onPartialText(fullText) }
                 } else if deltaType == "input_json_delta", let fragment = delta["partial_json"] as? String {
                     blockBuffers[index, default: ""] += fragment
                     if blockToolNames[index] == previewToolName,
