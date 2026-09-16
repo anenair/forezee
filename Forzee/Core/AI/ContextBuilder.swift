@@ -44,7 +44,8 @@ final class ContextBuilder {
             recentContext: buildRecentContext(workoutSummary: ws, lifeSignals: ls),
             conversationSummary: cs,
             currentTimeOfDay: Self.currentTimeOfDay(),
-            currentLocalTime: Self.formattedLocalTime()
+            currentLocalTime: Self.formattedLocalTime(),
+            currentDate: Self.formattedCurrentDate()
         )
     }
 
@@ -66,6 +67,16 @@ final class ContextBuilder {
     private static func formattedLocalTime(date: Date = .now) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
+    }
+
+    /// The actual calendar date and day of week — without this, Kai has no
+    /// way to know what day it is or reason about "since Monday"/"this week"
+    /// relative to missed workouts; currentTimeOfDay alone is just a coarse
+    /// morning/afternoon/evening/night bucket with no date attached.
+    private static func formattedCurrentDate(date: Date = .now) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMMM d, yyyy"
         return formatter.string(from: date)
     }
 
@@ -294,6 +305,7 @@ struct UserContextSnapshot: Codable {
     let conversationSummary: String
     let currentTimeOfDay: String      // "morning" | "afternoon" | "evening" | "night" — device local time
     let currentLocalTime: String      // e.g. "6:48 PM" — device local time, formatted
+    let currentDate: String           // e.g. "Tuesday, September 16, 2026" — device local date
 
     /// Encode to compact JSON string for inclusion in system prompt.
     func toCompactJSON() -> String {

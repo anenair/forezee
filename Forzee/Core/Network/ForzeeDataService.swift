@@ -26,6 +26,38 @@
 import Foundation
 import Supabase
 
+extension JSONDecoder {
+    /// Postgres/PostgREST timestamps carry microsecond fractional seconds
+    /// whenever they're nonzero (which `now()` almost always is), but
+    /// Foundation's built-in `.iso8601` strategy uses an `ISO8601DateFormatter`
+    /// with no fractional-seconds support and throws on exactly those
+    /// strings — silently failing every decode of a row with a `created_at`/
+    /// `updated_at` (or similar) column, which every `try?` call site here
+    /// then swallows into an empty/default fallback. This tries fractional
+    /// seconds first, then falls back to the plain format, so it decodes
+    /// either shape Postgres can produce.
+    static var forzeePostgres: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+
+            let withFractionalSeconds = ISO8601DateFormatter()
+            withFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = withFractionalSeconds.date(from: string) { return date }
+
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            if let date = plain.date(from: string) { return date }
+
+            throw DecodingError.dataCorruptedError(
+                in: container, debugDescription: "Unrecognized ISO8601 date: \(string)"
+            )
+        }
+        return decoder
+    }
+}
+
 final class ForzeeDataService {
 
     // MARK: - Shared Instance
@@ -118,13 +150,14 @@ final class ForzeeDataService {
             .single()
             .execute()
 
-        // Postgres timestamps come back as ISO8601 strings — the default
-        // JSONDecoder expects a numeric epoch and fails on those, which
-        // silently drops the whole profile (every caller here uses try?)
-        // and falls back to onboarding-default values (novice, bodyweight,
-        // 45 min) regardless of what the user actually set.
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // See JSONDecoder.forzeePostgres above — plain `.iso8601` throws on
+        // Postgres's fractional-second timestamps and every caller here uses
+        // try?, so a decode failure silently drops the whole profile and
+        // falls back to onboarding-default values (novice, bodyweight,
+        // 45 min) regardless of what the user actually set. This was the
+        // root cause of onboarding reappearing after every relaunch: the
+        // profile never decoded, so `onboardingComplete` never loaded as true.
+        let decoder = JSONDecoder.forzeePostgres
         return try decoder.decode(UserProfile.self, from: response.data)
     }
 
@@ -158,8 +191,7 @@ final class ForzeeDataService {
             .limit(limit)
             .execute()
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder.forzeePostgres
         let messages = try decoder.decode([StoredMessage].self, from: response.data)
         return messages.reversed()  // Return chronological order
     }
@@ -229,8 +261,7 @@ final class ForzeeDataService {
             .gte("logged_at", value: formatter.string(from: startOfDay))
             .execute()
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder.forzeePostgres
         let entries = try decoder.decode([NutritionEntry].self, from: response.data)
 
         return NutritionSummary(
@@ -374,8 +405,7 @@ final class ForzeeDataService {
             .limit(limit)
             .execute()
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder.forzeePostgres
         return try decoder.decode([SessionHistoryEntry].self, from: response.data)
     }
 
@@ -394,8 +424,7 @@ final class ForzeeDataService {
             .limit(limit)
             .execute()
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder.forzeePostgres
         return try decoder.decode([SessionHistoryEntry].self, from: response.data)
     }
 
@@ -412,8 +441,7 @@ final class ForzeeDataService {
             .order("started_at", ascending: false)
             .execute()
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder.forzeePostgres
         return try decoder.decode([SessionHistoryEntry].self, from: response.data)
     }
 
