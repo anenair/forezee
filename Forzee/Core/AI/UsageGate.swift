@@ -118,9 +118,15 @@ final class UsageGate {
     }
 
     private func fetchTodayUsage(userId: String, taskType: KaiTaskType) async -> Int {
-        // TODO: Query daily_usage_summary view from Supabase
-        // For now returns 0 — implement before any free-tier user testing
-        return 0
+        guard let summary = try? await ForzeeDataService.shared.fetchDailyUsageSummary(userId: userId) else {
+            return 0
+        }
+        switch taskType {
+        case .chatMessage:       return summary.chatMessagesToday
+        case .workoutGeneration: return summary.workoutsGeneratedToday
+        case .dailyBriefing:     return summary.briefingsToday
+        default:                 return 0  // not tracked in the view — freeTierDailyLimits has no cap for these anyway
+        }
     }
 }
 
