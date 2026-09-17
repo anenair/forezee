@@ -107,6 +107,7 @@ final class KaiEngine: ObservableObject {
             model: model,
             systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             messages: messages,
+            taskType: KaiTaskType.chatMessage.rawValue,
             onToken: onToken
         )
 
@@ -175,6 +176,7 @@ final class KaiEngine: ObservableObject {
                 messages: messages,
                 tools: tools,
                 previewToolName: CoachResponse.tool.name,
+                taskType: KaiTaskType.chatMessage.rawValue,
                 onPartialText: onPartialText
             )
 
@@ -354,7 +356,8 @@ final class KaiEngine: ObservableObject {
         let response = try await apiClient.complete(
             model: model,
             systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
-            userMessage: prompt
+            userMessage: prompt,
+            taskType: KaiTaskType.workoutGeneration.rawValue
         )
 
         // 6. Parse response into GeneratedWorkout
