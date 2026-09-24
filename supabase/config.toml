@@ -14,3 +14,9 @@ project_id = "forzee"
 # called anonymously. See send-push/index.ts for the authorization
 # model beyond that (service role, or a user pushing to themselves).
 verify_jwt = true
+
+[functions.claude-chat]
+# JWT verification stays on — the caller's verified session is how this
+# function knows which user is asking and re-checks their free-tier
+# limit server-side. See claude-chat/index.ts.
+verify_jwt = true

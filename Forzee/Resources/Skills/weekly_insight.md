@@ -1,7 +1,7 @@
 ---
 name: weekly_insight
 description: Write Kai's short synthesis of the user's training week — volume, recovery, and Momentum — in Kai's own coaching voice.
-model: sonnet
+model: opus
 ---
 
 ```json

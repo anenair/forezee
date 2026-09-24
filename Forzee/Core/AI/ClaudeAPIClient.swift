@@ -69,23 +69,88 @@ struct SystemPrompt {
     }
 }
 
+// MARK: - Per-model request rules
+
+extension KaiModel {
+    /// Thinking/effort fields each model needs. Sonnet 5 runs adaptive
+    /// thinking when `thinking` is omitted (Sonnet 4.6 didn't), so it's
+    /// disabled explicitly to keep Coach chat's latency and cost where they
+    /// were — and forced tool_choice working for Sonnet-routed skills.
+    /// Opus 5.5 rejects `thinking: disabled` outright (always-on adaptive
+    /// thinking); effort is its only control, pinned per model because
+    /// changing it between requests invalidates the prompt cache. Haiku 4.5
+    /// accepts neither field.
+    var reasoningFields: [String: Any] {
+        switch self {
+        case .haiku:  return [:]
+        case .sonnet: return ["thinking": ["type": "disabled"]]
+        case .opus:   return ["output_config": ["effort": "medium"]]
+        }
+    }
+
+    /// Opus 5.5 rejects `tool_choice` `tool`/`any` with a 400, so it gets
+    /// `auto` plus an explicit prompt instruction (`forcedToolInstruction`).
+    func toolChoice(forcing toolName: String) -> [String: Any] {
+        self == .opus ? ["type": "auto"] : ["type": "tool", "name": toolName]
+    }
+
+    /// nil for models that still accept a forced tool_choice.
+    func forcedToolInstruction(_ toolName: String) -> String? {
+        self == .opus ? "Respond only by calling the \(toolName) tool." : nil
+    }
+
+    /// On Opus 5.5 `max_tokens` covers thinking plus the reply, so a limit
+    /// sized for reply text alone would cut structured output off mid-JSON.
+    func maxTokens(_ requested: Int) -> Int {
+        self == .opus ? max(requested, 16_000) : requested
+    }
+}
+
 final class ClaudeAPIClient {
 
     // MARK: - Configuration
 
-    private let apiKey: String
-    private let baseURL = URL(string: "https://api.anthropic.com/v1/messages")!
-    private let anthropicVersion = "2023-06-01"
+    /// Every call goes through the claude-chat Supabase Edge Function, not
+    /// api.anthropic.com directly — the Anthropic key lives there as a
+    /// server-side secret and never ships inside this app. Previously the
+    /// raw key shipped in every installed copy of the app (Bundle.main's
+    /// CLAUDE_API_KEY), extractable from the IPA by anyone, with no
+    /// per-user attribution and no way to stop them calling Claude
+    /// directly with it, unlimited, billed to this app's own account.
+    private let functionURL: URL?
+    private let anonKey: String
 
     private let urlSession: URLSession
 
     init() {
-        self.apiKey = Bundle.main.infoDictionary?["CLAUDE_API_KEY"] as? String ?? ""
+        let supabaseURL = Bundle.main.infoDictionary?["SUPABASE_URL"] as? String ?? ""
+        self.functionURL = URL(string: "\(supabaseURL)/functions/v1/claude-chat")
+        self.anonKey = Bundle.main.infoDictionary?["SUPABASE_ANON_KEY"] as? String ?? ""
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         self.urlSession = URLSession(configuration: config)
+    }
+
+    /// The claude-chat function verifies this session's JWT itself (Supabase's
+    /// function gateway rejects anything else before our code even runs) —
+    /// this is what lets it know *which* user is calling, so it can re-check
+    /// UsageGate's free-tier limit server-side, where a client can't be
+    /// tricked into skipping it. Same reasoning as send-push's auth model.
+    private func makeRequest() async throws -> URLRequest {
+        guard let functionURL, !anonKey.isEmpty else {
+            throw ClaudeAPIError.notConfigured
+        }
+        guard let accessToken = await ForzeeDataService.shared.currentAccessToken() else {
+            throw ClaudeAPIError.notAuthenticated
+        }
+        var request = URLRequest(url: functionURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     // MARK: - Streaming Completion
@@ -96,17 +161,15 @@ final class ClaudeAPIClient {
         model: KaiModel,
         systemPrompt: SystemPrompt,
         messages: [KaiMessage],
+        taskType: String = "unspecified",
         onToken: @escaping (String) -> Void
     ) async throws -> String {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
-
-        let request = try buildRequest(
+        let request = try await buildRequest(
             model: model,
             systemPrompt: systemPrompt,
             messages: messages,
-            stream: true
+            stream: true,
+            taskType: taskType
         )
 
         var fullResponse = ""
@@ -142,18 +205,16 @@ final class ClaudeAPIClient {
     func complete(
         model: KaiModel,
         systemPrompt: SystemPrompt,
-        userMessage: String
+        userMessage: String,
+        taskType: String = "unspecified"
     ) async throws -> String {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
-
         let messages = [KaiMessage(role: .user, content: userMessage)]
-        let request = try buildRequest(
+        let request = try await buildRequest(
             model: model,
             systemPrompt: systemPrompt,
             messages: messages,
-            stream: false
+            stream: false,
+            taskType: taskType
         )
 
         let (data, response) = try await urlSession.data(for: request)
@@ -181,30 +242,26 @@ final class ClaudeAPIClient {
         systemPrompt: SystemPrompt,
         userMessage: String,
         tool: ClaudeTool,
-        maxTokens: Int = 300
+        maxTokens: Int = 300,
+        taskType: String = "unspecified"
     ) async throws -> [String: Any] {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
+        var request = try await makeRequest()
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
+        let content = model.forcedToolInstruction(tool.name).map { "\(userMessage)\n\n\($0)" } ?? userMessage
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": [["role": "user", "content": userMessage]],
+            "messages": [["role": "user", "content": content]],
             "tools": [[
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.inputSchema,
             ]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -232,26 +289,21 @@ final class ClaudeAPIClient {
         systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tool: ClaudeTool,
-        maxTokens: Int = 1536
+        maxTokens: Int = 1536,
+        taskType: String = "unspecified"
     ) async throws -> [String: Any] {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
+        var request = try await makeRequest()
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages, appending: model.forcedToolInstruction(tool.name)),
             "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -294,32 +346,27 @@ final class ClaudeAPIClient {
         messages: [KaiMessage],
         tool: ClaudeTool,
         maxTokens: Int = 8192,
+        taskType: String = "unspecified",
         onPartialJSON: @escaping (String) -> Void
     ) async throws -> [String: Any] {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
+        var request = try await makeRequest()
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "stream": true,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages, appending: model.forcedToolInstruction(tool.name)),
             "tools": [[
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.inputSchema,
                 "eager_input_streaming": true,
             ]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (asyncBytes, response) = try await urlSession.bytes(for: request)
@@ -369,29 +416,24 @@ final class ClaudeAPIClient {
         tools: [ClaudeTool],
         previewToolName: String,
         maxTokens: Int = 8192,
+        taskType: String = "unspecified",
         onPartialText: @escaping (String) -> Void
     ) async throws -> StreamedAutoToolResult {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
+        var request = try await makeRequest()
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "stream": true,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages),
             "tools": tools.map {
                 ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema, "eager_input_streaming": true]
             },
             "tool_choice": ["type": "auto"],
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (asyncBytes, response) = try await urlSession.bytes(for: request)
@@ -529,35 +571,32 @@ final class ClaudeAPIClient {
         systemPrompt: SystemPrompt,
         messages: [KaiMessage],
         tools: [ClaudeTool],
-        maxTokens: Int = 1024
+        maxTokens: Int = 1024,
+        taskType: String = "unspecified"
     ) async throws -> ClaudeToolChoiceResult {
-        guard !apiKey.isEmpty, !apiKey.hasPrefix("sk-ant-your") else {
-            throw ClaudeAPIError.apiKeyNotConfigured
-        }
         guard !tools.isEmpty else {
             // No skills loaded — same shape as "Claude chose not to use a tool."
             let text = try await complete(
                 model: model,
                 systemPrompt: systemPrompt,
-                userMessage: messages.last?.content ?? ""
+                userMessage: messages.last?.content ?? "",
+                taskType: taskType
             )
             return .text(text)
         }
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages),
             "tools": tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema] },
             "tool_choice": ["type": "auto"],
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -609,25 +648,35 @@ final class ClaudeAPIClient {
 
     // MARK: - Private
 
+    /// `instruction` is appended to the last message — how a model that
+    /// can't be forced onto a tool (see KaiModel.forcedToolInstruction) is
+    /// told to use one anyway.
+    private static func messagesJSON(_ messages: [KaiMessage], appending instruction: String? = nil) -> [[String: Any]] {
+        var json: [[String: Any]] = messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+        if let instruction, let last = json.indices.last {
+            json[last]["content"] = "\(json[last]["content"] as? String ?? "")\n\n\(instruction)"
+        }
+        return json
+    }
+
     private func buildRequest(
         model: KaiModel,
         systemPrompt: SystemPrompt,
         messages: [KaiMessage],
-        stream: Bool
-    ) throws -> URLRequest {
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        stream: Bool,
+        taskType: String
+    ) async throws -> URLRequest {
+        var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": 1024,
+            "max_tokens": model.maxTokens(1024),
             "stream": stream,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+            "messages": Self.messagesJSON(messages),
+            "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
@@ -678,13 +727,19 @@ final class ClaudeAPIClient {
         return text
     }
 
+    /// Selects text blocks by type rather than taking the first block — on
+    /// Opus 5.5 every response leads with a `thinking` block, which has no
+    /// `text` field.
     private func parseNonStreamResponse(_ data: Data) throws -> String {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = obj["content"] as? [[String: Any]],
-              let first = content.first,
-              let text = first["text"] as? String else {
+              let content = obj["content"] as? [[String: Any]] else {
             throw ClaudeAPIError.malformedResponse
         }
+        let text = content
+            .filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        guard !text.isEmpty else { throw ClaudeAPIError.malformedResponse }
         return text
     }
 
@@ -731,7 +786,8 @@ enum StreamedAutoToolResult {
 // MARK: - ClaudeAPIError
 
 enum ClaudeAPIError: LocalizedError {
-    case apiKeyNotConfigured
+    case notConfigured
+    case notAuthenticated
     case invalidResponse
     case malformedResponse
     case unauthorized
@@ -741,10 +797,12 @@ enum ClaudeAPIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .apiKeyNotConfigured:
-            return "Claude API key not configured. Add it to Secrets.xcconfig."
+        case .notConfigured:
+            return "Supabase isn't configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to Secrets.xcconfig."
+        case .notAuthenticated:
+            return "You're not signed in — sign in to talk to Kai."
         case .unauthorized:
-            return "Invalid Claude API key. Check Secrets.xcconfig."
+            return "The claude-chat function rejected this session. Try signing in again."
         case .rateLimited:
             return "Claude API rate limit hit. Try again in a moment."
         case .serverError(let code):

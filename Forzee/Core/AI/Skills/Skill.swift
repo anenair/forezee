@@ -83,7 +83,7 @@ enum SkillParseError: LocalizedError {
 /// ---
 /// name: skill_name
 /// description: one line Claude sees when deciding whether this skill applies
-/// model: haiku | sonnet
+/// model: haiku | sonnet | opus
 /// ---
 ///
 /// ```json
@@ -157,6 +157,7 @@ enum SkillParser {
         switch raw.lowercased() {
         case "haiku":  return .haiku
         case "sonnet": return .sonnet
+        case "opus":   return .opus
         default:       return nil
         }
     }

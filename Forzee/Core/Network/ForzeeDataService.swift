@@ -117,6 +117,19 @@ final class ForzeeDataService {
         }
     }
 
+    /// The current session's access token — what ClaudeAPIClient sends as
+    /// `Authorization: Bearer` to the claude-chat Edge Function. The Anthropic
+    /// key itself never ships to the client; this token is how that function
+    /// verifies who's calling and enforces free-tier limits per-user, server-side.
+    /// nil if there's no signed-in session (the caller should treat that as
+    /// "can't call Claude right now," same as a missing API key used to mean).
+    func currentAccessToken() async -> String? {
+        guard let session = try? await client.auth.session, !session.isExpired else {
+            return nil
+        }
+        return session.accessToken
+    }
+
     /// Sign in with email and password.
     func signIn(email: String, password: String) async throws -> String {
         let session = try await client.auth.signIn(email: email, password: password)
@@ -504,6 +517,44 @@ final class ForzeeDataService {
             .from("usage_tracking")
             .insert(payload)
             .execute()
+    }
+
+    /// Today's usage counts against the free-tier limits — the
+    /// `daily_usage_summary` view (forzee_schema.sql) already aggregates
+    /// this server-side, filtered to `usage_date = current_date`; this was
+    /// sitting unused while UsageGate.fetchTodayUsage hardcoded a stub
+    /// return of 0, meaning free-tier limits have never actually been
+    /// enforced. Returns nil when the user has no usage yet today (the
+    /// view has no row for them) — callers should treat that as zero usage.
+    func fetchDailyUsageSummary(userId: String) async throws -> DailyUsageSummary? {
+        let response = try await client
+            .from("daily_usage_summary")
+            .select()
+            .eq("user_id", value: userId)
+            .execute()
+
+        let decoder = JSONDecoder()
+        let summaries = try decoder.decode([DailyUsageSummary].self, from: response.data)
+        return summaries.first
+    }
+}
+
+// MARK: - DailyUsageSummary
+
+/// Mirrors the `daily_usage_summary` view's columns exactly.
+struct DailyUsageSummary: Codable {
+    let userId: String
+    let chatMessagesToday: Int
+    let workoutsGeneratedToday: Int
+    let briefingsToday: Int
+    let totalCostTodayUsd: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case userId                 = "user_id"
+        case chatMessagesToday      = "chat_messages_today"
+        case workoutsGeneratedToday = "workouts_generated_today"
+        case briefingsToday         = "briefings_today"
+        case totalCostTodayUsd      = "total_cost_today_usd"
     }
 }
 

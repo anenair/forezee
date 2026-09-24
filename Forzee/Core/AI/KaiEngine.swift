@@ -12,10 +12,10 @@
 //   - UsageGate enforces free-tier limits before any API call
 //   - All responses are streamed for a real-time coaching feel
 //
-// Model routing (enforced by TaskClassifier):
-//   - claude-haiku-4-5  → logging, confirmations, simple Q&A, daily briefing
-//   - claude-sonnet-4-6 → coaching, workout gen, recovery advice, periodization
-//   - Never use Opus.
+// Model routing (see TaskClassifier and KaiModel):
+//   - Haiku 4.5  → logging, confirmations, simple Q&A, daily briefing
+//   - Sonnet 5   → Coach chat, recovery advice, periodization
+//   - Opus 5.5   → workout generation, weekly read, workout report
 // ============================================================
 
 import Foundation
@@ -107,6 +107,7 @@ final class KaiEngine: ObservableObject {
             model: model,
             systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
             messages: messages,
+            taskType: KaiTaskType.chatMessage.rawValue,
             onToken: onToken
         )
 
@@ -175,6 +176,7 @@ final class KaiEngine: ObservableObject {
                 messages: messages,
                 tools: tools,
                 previewToolName: CoachResponse.tool.name,
+                taskType: KaiTaskType.chatMessage.rawValue,
                 onPartialText: onPartialText
             )
 
@@ -344,8 +346,8 @@ final class KaiEngine: ObservableObject {
         // 2. Context snapshot
         let context = await contextBuilder.buildSnapshot(userId: userId)
 
-        // 3. Always Sonnet for workout generation
-        let model = KaiModel.sonnet
+        // 3. Always Opus for workout generation — low volume, and plan quality is the product
+        let model = KaiModel.opus
 
         // 4. Build generation prompt
         let prompt = WorkoutGenerationPrompt.build(context: context, preferences: preferences)
@@ -354,7 +356,8 @@ final class KaiEngine: ObservableObject {
         let response = try await apiClient.complete(
             model: model,
             systemPrompt: .layered(KaiSystemPrompt.buildLayered(context: context)),
-            userMessage: prompt
+            userMessage: prompt,
+            taskType: KaiTaskType.workoutGeneration.rawValue
         )
 
         // 6. Parse response into GeneratedWorkout
@@ -624,7 +627,7 @@ final class KaiEngine: ObservableObject {
 
     /// A short report after the user finishes a workout — what they actually
     /// did vs. what was prescribed, plus one thing to focus on next time.
-    /// Sonnet — needs to reason over the full context snapshot, same as generation.
+    /// Opus — needs to reason over the full context snapshot, same as generation.
     func generateWorkoutReport(
         userId: String,
         workout: GeneratedWorkout,
@@ -633,7 +636,7 @@ final class KaiEngine: ObservableObject {
         try await usageGate.checkLimit(userId: userId, taskType: .workoutReport)
 
         let context = await contextBuilder.buildSnapshot(userId: userId)
-        let model = KaiModel.sonnet
+        let model = KaiModel.opus
         let prompt = WorkoutReportPrompt.build(
             context: context,
             workout: workout,
@@ -705,11 +708,17 @@ enum SkillDispatchResult {
 
 // MARK: - KaiModel
 
-/// The Claude models Kai is allowed to use.
-/// Never use Opus — not needed for this use case.
+/// The Claude models Kai uses, split by what each route needs: Haiku for
+/// fast, cheap routing and short replies; Sonnet for Coach chat (high
+/// volume, latency-sensitive); Opus only for the low-volume, judgment-heavy
+/// generations — workout plans, the weekly read, post-workout reports —
+/// where quality shows most and volume is too low for its price to matter.
+/// Per-model API rules (thinking, effort, tool_choice) live in
+/// ClaudeAPIClient.swift's KaiModel extension.
 enum KaiModel: String {
-    case haiku  = "claude-haiku-4-5-20251001"
-    case sonnet = "claude-sonnet-4-6"
+    case haiku  = "claude-haiku-4-5-20251001"  // retirement not before 2026-10-15 — needs a replacement
+    case sonnet = "claude-sonnet-5"
+    case opus   = "claude-opus-5-5"
 }
 
 // MARK: - KaiMessage
