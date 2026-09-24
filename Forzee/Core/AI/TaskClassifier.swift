@@ -7,11 +7,12 @@
 // Rule: use Haiku unless the task genuinely needs Sonnet's
 // full reasoning. Every unnecessary Sonnet call costs ~10x more.
 //
-// Routing table (from PRD / briefing):
+// Routing table:
 //   Haiku  → logging, confirmations, simple Q&A, notifications,
 //             daily briefing
-//   Sonnet → coaching conversations, workout generation,
-//             recovery advice, periodization, insight generation
+//   Sonnet → coaching conversations, recovery advice, periodization
+//   Opus   → workout generation, workout report, weekly read
+//             (low-volume calls where output quality matters most)
 // ============================================================
 
 import Foundation
@@ -32,8 +33,8 @@ final class TaskClassifier {
     func classify(taskType: KaiTaskType) -> KaiModel {
         switch taskType {
         case .chatMessage:          return .sonnet  // Coaching chat — conversational depth
-        case .workoutGeneration:    return .sonnet
-        case .workoutReport:        return .sonnet  // Post-workout report — quality + format reliability
+        case .workoutGeneration:    return .opus    // Low volume, plan quality is the product
+        case .workoutReport:        return .opus    // Post-workout report — quality + format reliability
         case .periodization:        return .sonnet
         case .logging:              return .haiku
         case .confirmation:         return .haiku

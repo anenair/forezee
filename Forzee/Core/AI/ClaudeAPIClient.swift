@@ -69,6 +69,43 @@ struct SystemPrompt {
     }
 }
 
+// MARK: - Per-model request rules
+
+extension KaiModel {
+    /// Thinking/effort fields each model needs. Sonnet 5 runs adaptive
+    /// thinking when `thinking` is omitted (Sonnet 4.6 didn't), so it's
+    /// disabled explicitly to keep Coach chat's latency and cost where they
+    /// were — and forced tool_choice working for Sonnet-routed skills.
+    /// Opus 5.5 rejects `thinking: disabled` outright (always-on adaptive
+    /// thinking); effort is its only control, pinned per model because
+    /// changing it between requests invalidates the prompt cache. Haiku 4.5
+    /// accepts neither field.
+    var reasoningFields: [String: Any] {
+        switch self {
+        case .haiku:  return [:]
+        case .sonnet: return ["thinking": ["type": "disabled"]]
+        case .opus:   return ["output_config": ["effort": "medium"]]
+        }
+    }
+
+    /// Opus 5.5 rejects `tool_choice` `tool`/`any` with a 400, so it gets
+    /// `auto` plus an explicit prompt instruction (`forcedToolInstruction`).
+    func toolChoice(forcing toolName: String) -> [String: Any] {
+        self == .opus ? ["type": "auto"] : ["type": "tool", "name": toolName]
+    }
+
+    /// nil for models that still accept a forced tool_choice.
+    func forcedToolInstruction(_ toolName: String) -> String? {
+        self == .opus ? "Respond only by calling the \(toolName) tool." : nil
+    }
+
+    /// On Opus 5.5 `max_tokens` covers thinking plus the reply, so a limit
+    /// sized for reply text alone would cut structured output off mid-JSON.
+    func maxTokens(_ requested: Int) -> Int {
+        self == .opus ? max(requested, 16_000) : requested
+    }
+}
+
 final class ClaudeAPIClient {
 
     // MARK: - Configuration
@@ -210,19 +247,21 @@ final class ClaudeAPIClient {
     ) async throws -> [String: Any] {
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        let content = model.forcedToolInstruction(tool.name).map { "\(userMessage)\n\n\($0)" } ?? userMessage
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": [["role": "user", "content": userMessage]],
+            "messages": [["role": "user", "content": content]],
             "tools": [[
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.inputSchema,
             ]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -255,15 +294,16 @@ final class ClaudeAPIClient {
     ) async throws -> [String: Any] {
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages, appending: model.forcedToolInstruction(tool.name)),
             "tools": [["name": tool.name, "description": tool.description, "input_schema": tool.inputSchema]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -311,21 +351,22 @@ final class ClaudeAPIClient {
     ) async throws -> [String: Any] {
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "stream": true,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages, appending: model.forcedToolInstruction(tool.name)),
             "tools": [[
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.inputSchema,
                 "eager_input_streaming": true,
             ]],
-            "tool_choice": ["type": "tool", "name": tool.name],
+            "tool_choice": model.toolChoice(forcing: tool.name),
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (asyncBytes, response) = try await urlSession.bytes(for: request)
@@ -380,18 +421,19 @@ final class ClaudeAPIClient {
     ) async throws -> StreamedAutoToolResult {
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "stream": true,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages),
             "tools": tools.map {
                 ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema, "eager_input_streaming": true]
             },
             "tool_choice": ["type": "auto"],
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (asyncBytes, response) = try await urlSession.bytes(for: request)
@@ -545,15 +587,16 @@ final class ClaudeAPIClient {
 
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": maxTokens,
+            "max_tokens": model.maxTokens(maxTokens),
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages),
             "tools": tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema] },
             "tool_choice": ["type": "auto"],
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -605,6 +648,17 @@ final class ClaudeAPIClient {
 
     // MARK: - Private
 
+    /// `instruction` is appended to the last message — how a model that
+    /// can't be forced onto a tool (see KaiModel.forcedToolInstruction) is
+    /// told to use one anyway.
+    private static func messagesJSON(_ messages: [KaiMessage], appending instruction: String? = nil) -> [[String: Any]] {
+        var json: [[String: Any]] = messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+        if let instruction, let last = json.indices.last {
+            json[last]["content"] = "\(json[last]["content"] as? String ?? "")\n\n\(instruction)"
+        }
+        return json
+    }
+
     private func buildRequest(
         model: KaiModel,
         systemPrompt: SystemPrompt,
@@ -614,14 +668,15 @@ final class ClaudeAPIClient {
     ) async throws -> URLRequest {
         var request = try await makeRequest()
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model.rawValue,
-            "max_tokens": 1024,
+            "max_tokens": model.maxTokens(1024),
             "stream": stream,
             "system": systemPrompt.jsonValue,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
+            "messages": Self.messagesJSON(messages),
             "task_type": taskType,
         ]
+        body.merge(model.reasoningFields) { _, new in new }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
@@ -672,13 +727,19 @@ final class ClaudeAPIClient {
         return text
     }
 
+    /// Selects text blocks by type rather than taking the first block — on
+    /// Opus 5.5 every response leads with a `thinking` block, which has no
+    /// `text` field.
     private func parseNonStreamResponse(_ data: Data) throws -> String {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = obj["content"] as? [[String: Any]],
-              let first = content.first,
-              let text = first["text"] as? String else {
+              let content = obj["content"] as? [[String: Any]] else {
             throw ClaudeAPIError.malformedResponse
         }
+        let text = content
+            .filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        guard !text.isEmpty else { throw ClaudeAPIError.malformedResponse }
         return text
     }
 
