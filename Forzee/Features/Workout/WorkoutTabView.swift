@@ -3,7 +3,7 @@
 // Forzee — Features/Workout
 //
 // The core gym-facing screen: generate today's workout, check
-// off exercises as they're done (with a live Haiku "companion"
+// off exercises as they're done (with a live Kai "companion"
 // comment after each), then a final session save — effort, mood,
 // rating, notes — that's the actual completion of the workout,
 // followed by a best-effort Sonnet post-workout report. Replaces
@@ -16,7 +16,7 @@
 //
 // Voice logging: "Hi Kai, mark a set complete, 135 lbs, 8 reps" /
 // "same as previous" / "what's my next exercise" / "how am I doing".
-// Real LLM understanding, not pattern matching — a single Haiku
+// Real LLM understanding, not pattern matching — a single
 // tool-use call (KaiEngine.interpretWorkoutVoiceCommand) classifies
 // the intent and extracts weight/reps in one round-trip. Genuinely
 // open-ended questions escalate to a full Sonnet chat call. Exercise
@@ -223,7 +223,7 @@ struct WorkoutTabView: View {
         }
     }
 
-    /// Real LLM understanding — no local pattern matching. A single Haiku
+    /// Real LLM understanding — no local pattern matching. A single
     /// tool-use call classifies the intent AND extracts weight/reps in one
     /// round-trip (see KaiEngine.interpretWorkoutVoiceCommand); genuinely
     /// open-ended questions escalate to a full Sonnet chat call.

@@ -86,7 +86,6 @@ final class UsageGate {
         // ignores cache discounts). Opus's thinking tokens bill as output,
         // which outputTokens here doesn't capture — an undercount there.
         let (inputCostPerMillion, outputCostPerMillion): (Double, Double) = switch model {
-        case .haiku:  (1.00, 5.00)
         case .sonnet: (2.00, 10.00)
         case .opus:   (4.00, 20.00)
         }

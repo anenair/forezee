@@ -4,15 +4,17 @@
 //
 // Decides which Claude model to route a task to.
 //
-// Rule: use Haiku unless the task genuinely needs Sonnet's
-// full reasoning. Every unnecessary Sonnet call costs ~10x more.
-//
 // Routing table:
-//   Haiku  → logging, confirmations, simple Q&A, notifications,
-//             daily briefing
-//   Sonnet → coaching conversations, recovery advice, periodization
-//   Opus   → workout generation, workout report, weekly read
-//             (low-volume calls where output quality matters most)
+//   Sonnet 5 → everything that isn't a generation: coaching chat,
+//              logging, confirmations, simple Q&A, notifications,
+//              daily briefing, gym companion, voice commands,
+//              skills. Thinking off (see KaiModel.reasoningFields),
+//              so short tasks stay fast.
+//   Opus 5.5 → workout generation, workout report, weekly read
+//              (low-volume calls where output quality matters most)
+//
+// Haiku 4.5 used to take the short tasks; it was dropped ahead of
+// its retirement window (not before 2026-10-15).
 // ============================================================
 
 import Foundation
@@ -22,11 +24,10 @@ final class TaskClassifier {
     // MARK: - Classification
 
     /// Classify a user message and return the appropriate model.
+    /// Always Sonnet today — kept as the one place chat routing is
+    /// decided, so a cheaper tier for simple messages can come back here.
     func classify(message: String, context: UserContextSnapshot) -> KaiModel {
-        if isSimpleTask(message: message) {
-            return .haiku
-        }
-        return .sonnet
+        .sonnet
     }
 
     /// Classify a task type enum directly (used for non-chat tasks).
@@ -36,34 +37,13 @@ final class TaskClassifier {
         case .workoutGeneration:    return .opus    // Low volume, plan quality is the product
         case .workoutReport:        return .opus    // Post-workout report — quality + format reliability
         case .periodization:        return .sonnet
-        case .logging:              return .haiku
-        case .confirmation:         return .haiku
-        case .simpleQA:             return .haiku
-        case .notification:         return .haiku
-        case .dailyBriefing:        return .haiku
-        case .gymCompanionComment:  return .haiku  // Live in-workout remarks — speed + cost
+        case .logging:              return .sonnet
+        case .confirmation:         return .sonnet
+        case .simpleQA:             return .sonnet
+        case .notification:         return .sonnet
+        case .dailyBriefing:        return .sonnet
+        case .gymCompanionComment:  return .sonnet  // Live in-workout remarks — short, thinking off
         }
-    }
-
-    // MARK: - Private
-
-    /// Heuristic check for messages that clearly don't need Sonnet.
-    /// Intent: save cost on the ~30% of messages that are simple.
-    private func isSimpleTask(message: String) -> Bool {
-        let lower = message.lowercased().trimmingCharacters(in: .whitespaces)
-
-        // Very short messages are usually confirmations or acks
-        if lower.count < 20 { return true }
-
-        // Logging keywords
-        let loggingPatterns = ["logged", "done", "finished", "completed", "skipped", "rest day"]
-        if loggingPatterns.contains(where: lower.contains) { return true }
-
-        // Simple yes/no
-        let simpleResponses = ["yes", "no", "ok", "okay", "sure", "sounds good", "got it", "thanks"]
-        if simpleResponses.contains(where: { lower == $0 || lower.hasPrefix($0 + " ") }) { return true }
-
-        return false
     }
 }
 
@@ -71,7 +51,7 @@ final class TaskClassifier {
 
 /// All task types Kai can perform. Used for model routing and usage tracking.
 enum KaiTaskType: String, Codable {
-    // Sonnet tasks
+    // Longer tasks
     case chatMessage       = "chat_message"
     case workoutGeneration = "workout_generation"
     case workoutReport     = "workout_report"
@@ -80,7 +60,7 @@ enum KaiTaskType: String, Codable {
     // table already has an answer for it whenever it lands.
     case periodization     = "periodization"
 
-    // Haiku tasks
+    // Short tasks
     case logging             = "logging"
     case confirmation        = "confirmation"
     case simpleQA            = "simple_qa"

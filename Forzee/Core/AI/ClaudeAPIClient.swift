@@ -78,11 +78,9 @@ extension KaiModel {
     /// were — and forced tool_choice working for Sonnet-routed skills.
     /// Opus 5.5 rejects `thinking: disabled` outright (always-on adaptive
     /// thinking); effort is its only control, pinned per model because
-    /// changing it between requests invalidates the prompt cache. Haiku 4.5
-    /// accepts neither field.
+    /// changing it between requests invalidates the prompt cache.
     var reasoningFields: [String: Any] {
         switch self {
-        case .haiku:  return [:]
         case .sonnet: return ["thinking": ["type": "disabled"]]
         case .opus:   return ["output_config": ["effort": "medium"]]
         }

@@ -12,10 +12,10 @@
 // formatting that turns it into the skill's {{workout_state}}
 // placeholder, and the decoded result type.
 //
-// Haiku, not Sonnet: this fires mid-set, so speed matters, and
-// intent classification + number extraction doesn't need Sonnet's
-// depth. Genuinely open-ended questions get escalated to a real
-// KaiEngine.chat (Sonnet) call by WorkoutTabView when action == "chat".
+// Sonnet with thinking off: this fires mid-set, so speed matters,
+// and intent classification + number extraction needs no reasoning
+// pass. Genuinely open-ended questions get escalated to a full
+// KaiEngine.chat call by WorkoutTabView when action == "chat".
 // ============================================================
 
 import Foundation

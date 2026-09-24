@@ -67,7 +67,7 @@ enum SkillParseError: LocalizedError {
         case .invalidToolSchemaJSON:
             return "Skill's tool schema block isn't valid JSON."
         case .unknownModel(let value):
-            return "Skill frontmatter model \"\(value)\" isn't \"haiku\" or \"sonnet\"."
+            return "Skill frontmatter model \"\(value)\" isn't \"sonnet\" or \"opus\"."
         }
     }
 }
@@ -83,7 +83,7 @@ enum SkillParseError: LocalizedError {
 /// ---
 /// name: skill_name
 /// description: one line Claude sees when deciding whether this skill applies
-/// model: haiku | sonnet | opus
+/// model: sonnet | opus
 /// ---
 ///
 /// ```json
@@ -155,7 +155,6 @@ enum SkillParser {
 
     private static func kaiModel(from raw: String) -> KaiModel? {
         switch raw.lowercased() {
-        case "haiku":  return .haiku
         case "sonnet": return .sonnet
         case "opus":   return .opus
         default:       return nil
