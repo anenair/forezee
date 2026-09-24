@@ -1,7 +1,7 @@
 ---
 name: workout_voice_command
 description: Interpret a spoken mid-workout command from the user and decide what to do.
-model: haiku
+model: sonnet
 ---
 
 ```json

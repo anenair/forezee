@@ -1,7 +1,7 @@
 ---
 name: show_progress
 description: The user is asking about their progress on a specific exercise — how a lift has moved over time.
-model: haiku
+model: sonnet
 ---
 
 ```json

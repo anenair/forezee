@@ -2,14 +2,14 @@
 // KaiVoiceSynthesizer.swift
 // Forzee — Integrations/Voice
 //
-// Speaks Kai's replies aloud. Premium users with an ElevenLabs
-// key configured get Kai's custom voice; everyone else gets the
-// free system voice (AVSpeechSynthesizer) — this split was
-// already staged in Secrets.xcconfig.example, just never wired up.
+// Speaks Kai's replies aloud. Premium users get Kai's custom
+// ElevenLabs voice through the kai-voice Edge Function, which holds
+// the ElevenLabs key server-side and re-checks premium status;
+// everyone else gets the free system voice (AVSpeechSynthesizer).
 //
-// Never lets a voice failure block the conversation: any
-// ElevenLabs error (network, quota, bad key) falls back to the
-// system voice rather than going silent.
+// Never lets a voice failure block the conversation: any error
+// (network, not deployed, not premium, ElevenLabs down) falls back
+// to the system voice rather than going silent.
 // ============================================================
 
 import Foundation
@@ -32,32 +32,29 @@ final class KaiVoiceSynthesizer: NSObject, ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private var onFinish: (() -> Void)?
 
-    private let elevenLabsAPIKey: String
-    private let elevenLabsVoiceId: String
-
     private override init() {
-        self.elevenLabsAPIKey = Bundle.main.infoDictionary?["ELEVENLABS_API_KEY"] as? String ?? ""
-        self.elevenLabsVoiceId = Bundle.main.infoDictionary?["ELEVENLABS_VOICE_ID"] as? String ?? ""
         super.init()
         systemSynthesizer.delegate = self
     }
 
     // MARK: - Public
 
-    /// Speaks the given text aloud. Uses ElevenLabs for premium users when
-    /// configured, otherwise (or on any failure) the free system voice.
+    /// Speaks the given text aloud. Uses Kai's custom voice for premium
+    /// users, otherwise (or on any failure) the free system voice.
+    /// `isPremium` only saves free users a round trip — kai-voice
+    /// re-checks premium status server-side either way.
     func speak(_ text: String, isPremium: Bool, onFinish: @escaping () -> Void = {}) {
         self.onFinish = onFinish
         isSpeaking = true
 
-        guard isPremium, elevenLabsConfigured else {
+        guard isPremium else {
             speakWithSystemVoice(text)
             return
         }
 
         Task {
             do {
-                let audioData = try await fetchElevenLabsAudio(for: text)
+                let audioData = try await fetchKaiVoiceAudio(for: text)
                 playAudio(audioData, fallbackText: text)
             } catch {
                 #if DEBUG
@@ -84,26 +81,15 @@ final class KaiVoiceSynthesizer: NSObject, ObservableObject {
         systemSynthesizer.speak(utterance)
     }
 
-    // MARK: - Private — ElevenLabs
+    // MARK: - Private — Kai's voice (kai-voice Edge Function)
 
-    private var elevenLabsConfigured: Bool {
-        !elevenLabsAPIKey.isEmpty
-            && !elevenLabsAPIKey.hasPrefix("your-elevenlabs")
-            && !elevenLabsVoiceId.isEmpty
-            && !elevenLabsVoiceId.hasPrefix("your-kai-voice")
-    }
-
-    private func fetchElevenLabsAudio(for text: String) async throws -> Data {
-        let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenLabsVoiceId)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(elevenLabsAPIKey, forHTTPHeaderField: "xi-api-key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(ElevenLabsRequest(text: text))
+    private func fetchKaiVoiceAudio(for text: String) async throws -> Data {
+        var request = try await ForzeeDataService.shared.edgeFunctionRequest("kai-voice")
+        request.httpBody = try JSONEncoder().encode(["text": text])
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw KaiVoiceError.elevenLabsRequestFailed
+            throw KaiVoiceError.voiceRequestFailed
         }
         return data
     }
@@ -153,22 +139,10 @@ extension KaiVoiceSynthesizer: AVAudioPlayerDelegate {
     }
 }
 
-// MARK: - ElevenLabsRequest
-
-private struct ElevenLabsRequest: Encodable {
-    let text: String
-    let modelId = "eleven_turbo_v2_5"
-
-    enum CodingKeys: String, CodingKey {
-        case text
-        case modelId = "model_id"
-    }
-}
-
 // MARK: - KaiVoiceError
 
 enum KaiVoiceError: LocalizedError {
-    case elevenLabsRequestFailed
+    case voiceRequestFailed
 
     var errorDescription: String? {
         "Kai's voice is unavailable right now."

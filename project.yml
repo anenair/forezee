@@ -82,8 +82,6 @@ targets:
         SUPABASE_URL: $(SUPABASE_URL)
         SUPABASE_ANON_KEY: $(SUPABASE_ANON_KEY)
         REVENUECAT_API_KEY: $(REVENUECAT_API_KEY)
-        ELEVENLABS_API_KEY: $(ELEVENLABS_API_KEY)
-        ELEVENLABS_VOICE_ID: $(ELEVENLABS_VOICE_ID)
     dependencies:
       - package: Supabase
       - package: RevenueCat

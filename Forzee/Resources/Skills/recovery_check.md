@@ -1,7 +1,7 @@
 ---
 name: recovery_check
 description: Answer whether the user should train as planned, train lighter, or take a rest day today, based on their recent sleep, HRV, calendar, and training load.
-model: haiku
+model: sonnet
 ---
 
 ```json

@@ -1,7 +1,7 @@
 ---
 name: adjust_plan_from_chat
 description: Update one of the user's durable, app-wide training PREFERENCES stored in Settings (their program split type, exercise variety, warm-up sets, circuits/supersets, units, session length, coach mode, fitness level) when they ask for that specific kind of change in chat, instead of sending them to Settings. Do NOT use this for a request about THIS conversation's specific workout — a different day's focus ("switch it to chest day"), a different duration for today only, or swapping specific exercises. Those aren't a settings change; leave them for the main coach reply to handle with a real workout.
-model: haiku
+model: sonnet
 ---
 
 ```json

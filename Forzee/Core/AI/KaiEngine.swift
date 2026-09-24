@@ -7,14 +7,14 @@
 //
 // Architecture:
 //   - KaiEngine owns the API key and HTTP session
-//   - TaskClassifier decides which model to use (Haiku vs Sonnet)
+//   - TaskClassifier decides which model to use (Sonnet vs Opus)
 //   - ContextBuilder assembles the compressed user context snapshot
 //   - UsageGate enforces free-tier limits before any API call
 //   - All responses are streamed for a real-time coaching feel
 //
 // Model routing (see TaskClassifier and KaiModel):
-//   - Haiku 4.5  → logging, confirmations, simple Q&A, daily briefing
-//   - Sonnet 5   → Coach chat, recovery advice, periodization
+//   - Sonnet 5   → Coach chat, skills, voice commands, logging,
+//                  confirmations, simple Q&A, daily briefing
 //   - Opus 5.5   → workout generation, weekly read, workout report
 // ============================================================
 
@@ -131,7 +131,7 @@ final class KaiEngine: ObservableObject {
     /// `tool_choice: auto`, so Claude itself decides which one applies —
     /// no separate "does a skill match?" round trip before the real
     /// reply even starts. (An earlier version ran skill discovery as its
-    /// own Haiku call first; that meant every message paid for a second
+    /// own call first; that meant every message paid for a second
     /// network round trip, plus a discarded prose answer on the common
     /// case where nothing matched.)
     ///
@@ -189,7 +189,7 @@ final class KaiEngine: ObservableObject {
                 if let skill = candidateSkills.first(where: { $0.name == name }) {
                     matchedSkillForUsage = skill
                     if skill.name == "show_progress" {
-                        // Haiku/Sonnet only identified WHICH exercise — the
+                        // The model only identified WHICH exercise — the
                         // numbers below come straight from real logged sets
                         // (InsightsEngine), never from the model, matching
                         // the system prompt's "never fabricate health data"
@@ -377,10 +377,10 @@ final class KaiEngine: ObservableObject {
 
     /// Generate the user's daily morning briefing (always free).
     ///
-    /// Uses Haiku — fast, cheap, sufficient for a daily summary.
+    /// Sonnet with thinking off — a short summary, no reasoning needed.
     func generateDailyBriefing(userId: String) async throws -> String {
         let context = await contextBuilder.buildSnapshot(userId: userId)
-        let model = KaiModel.haiku
+        let model = KaiModel.sonnet
 
         let prompt = DailyBriefingPrompt.build(context: context)
 
@@ -402,14 +402,14 @@ final class KaiEngine: ObservableObject {
     }
 
     /// A short, live remark fired when the user checks off an exercise mid-workout.
-    /// Haiku, no context snapshot — this needs to land while someone's resting
+    /// Sonnet (thinking off), no context snapshot — this needs to land while someone's resting
     /// between sets at the gym, not after a HealthKit/EventKit/WeatherKit round-trip.
     func generateGymCompanionComment(
         userId: String,
         exerciseName: String,
         fitnessLevel: String
     ) async throws -> String {
-        let model = KaiModel.haiku
+        let model = KaiModel.sonnet
         let prompt = GymCompanionCommentPrompt.build(exerciseName: exerciseName, fitnessLevel: fitnessLevel)
 
         let response = try await apiClient.complete(
@@ -430,7 +430,7 @@ final class KaiEngine: ObservableObject {
     }
 
     /// Real LLM understanding of a mid-workout voice command — no local
-    /// pattern matching. Haiku + tool use classifies the intent and extracts
+    /// pattern matching. Sonnet + tool use classifies the intent and extracts
     /// weight/reps in one call; genuinely open-ended questions come back as
     /// action == .chat for the caller to escalate to a full chat() call.
     /// No context snapshot, same reasoning as the companion comment: this
@@ -588,7 +588,7 @@ final class KaiEngine: ObservableObject {
         userId: String,
         history: [KaiMessage],
         candidateSkills: [Skill]? = nil,
-        model: KaiModel = .haiku,
+        model: KaiModel = .sonnet,
         systemPrompt: SystemPrompt = .plain(KaiSystemPrompt.identityOnly)
     ) async throws -> SkillDispatchResult {
         let skills = candidateSkills ?? SkillLoader.shared.skills
@@ -597,9 +597,8 @@ final class KaiEngine: ObservableObject {
         // The model that decides *and* executes in the same call — deciding
         // which skill (if any) applies isn't a separate round trip from
         // producing that skill's structured output, so this is the model
-        // both run on. Defaults to Haiku (fast/cheap intent routing); pass
-        // `model:` when the candidate set needs Sonnet's judgment to
-        // discriminate well.
+        // both run on. Defaults to Sonnet with thinking off (fast intent
+        // routing); pass `model:` to override.
         let result = try await apiClient.completeWithTools(
             model: model,
             systemPrompt: systemPrompt,
@@ -708,15 +707,14 @@ enum SkillDispatchResult {
 
 // MARK: - KaiModel
 
-/// The Claude models Kai uses, split by what each route needs: Haiku for
-/// fast, cheap routing and short replies; Sonnet for Coach chat (high
+/// The Claude models Kai uses, split by what each route needs: Sonnet
+/// (thinking off) for Coach chat, skills and every short task (high
 /// volume, latency-sensitive); Opus only for the low-volume, judgment-heavy
 /// generations — workout plans, the weekly read, post-workout reports —
 /// where quality shows most and volume is too low for its price to matter.
 /// Per-model API rules (thinking, effort, tool_choice) live in
 /// ClaudeAPIClient.swift's KaiModel extension.
 enum KaiModel: String {
-    case haiku  = "claude-haiku-4-5-20251001"  // retirement not before 2026-10-15 — needs a replacement
     case sonnet = "claude-sonnet-5"
     case opus   = "claude-opus-5-5"
 }
