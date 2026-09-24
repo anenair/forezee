@@ -395,7 +395,11 @@ create policy "Service role can insert usage"
 -- USAGE LIMITS VIEW
 -- Easy lookup of today's usage vs limits per user
 -- ============================================================
-create or replace view public.daily_usage_summary as
+-- security_invoker: without it the view runs with its owner's rights and
+-- skips usage_tracking's RLS, letting any signed-in user read every user's
+-- usage and cost through the public anon key.
+create or replace view public.daily_usage_summary
+with (security_invoker = true) as
 select
   user_id,
   usage_date,
@@ -431,6 +435,37 @@ create policy "Users can update own profile"
   on public.profiles for update using (auth.uid() = id);
 create policy "Users can insert own profile"
   on public.profiles for insert with check (auth.uid() = id);
+
+-- The policies above let users edit their own profile row, which on its own
+-- would let anyone grant themselves premium through the public anon key.
+-- Subscription fields may only change via the service role — in practice
+-- the sync-subscription Edge Function, which reads them from RevenueCat.
+-- Checks current_user rather than JWT claims so admins in the SQL editor
+-- (role postgres) can still fix a row by hand.
+create or replace function public.protect_subscription_columns()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user not in ('authenticated', 'anon') then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.subscription_tier := 'free';
+    new.subscription_expires_at := null;
+  elsif new.subscription_tier is distinct from old.subscription_tier
+     or new.subscription_expires_at is distinct from old.subscription_expires_at then
+    raise exception 'subscription fields can only be changed server-side'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger protect_subscription_columns
+  before insert or update on public.profiles
+  for each row execute function public.protect_subscription_columns();
 
 -- Workouts
 create policy "Users can manage own workouts"

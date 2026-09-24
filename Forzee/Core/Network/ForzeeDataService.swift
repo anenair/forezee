@@ -68,11 +68,16 @@ final class ForzeeDataService {
 
     private let client: Supabase.SupabaseClient
 
+    /// nil until Secrets.xcconfig has real Supabase values.
+    private let functionsBaseURL: URL?
+    private let anonKey: String
+
     // MARK: - Init
 
     private init() {
         let url = Bundle.main.infoDictionary?["SUPABASE_URL"] as? String ?? ""
         let key = Bundle.main.infoDictionary?["SUPABASE_ANON_KEY"] as? String ?? ""
+        self.anonKey = key
 
         guard let supabaseURL = URL(string: url), !key.isEmpty,
               !url.hasPrefix("https://your-project") else {
@@ -81,6 +86,7 @@ final class ForzeeDataService {
             #if DEBUG
             print("⚠️  ForzeeDataService: URL or key not configured. Fill in Secrets.xcconfig.")
             #endif
+            self.functionsBaseURL = nil
             self.client = Supabase.SupabaseClient(
                 supabaseURL: URL(string: "https://placeholder.supabase.co")!,
                 supabaseKey: "placeholder"
@@ -88,6 +94,7 @@ final class ForzeeDataService {
             return
         }
 
+        self.functionsBaseURL = supabaseURL.appendingPathComponent("functions/v1")
         self.client = Supabase.SupabaseClient(
             supabaseURL: supabaseURL,
             supabaseKey: key,
@@ -117,17 +124,31 @@ final class ForzeeDataService {
         }
     }
 
-    /// The current session's access token — what ClaudeAPIClient sends as
-    /// `Authorization: Bearer` to the claude-chat Edge Function. The Anthropic
-    /// key itself never ships to the client; this token is how that function
-    /// verifies who's calling and enforces free-tier limits per-user, server-side.
-    /// nil if there's no signed-in session (the caller should treat that as
-    /// "can't call Claude right now," same as a missing API key used to mean).
+    /// nil if there's no signed-in session.
     func currentAccessToken() async -> String? {
         guard let session = try? await client.auth.session, !session.isExpired else {
             return nil
         }
         return session.accessToken
+    }
+
+    // MARK: - Edge Functions
+
+    /// An authenticated POST to one of Forzee's Supabase Edge Functions
+    /// (supabase/functions/). This is the only way the app reaches anything
+    /// that needs a secret key — Claude, ElevenLabs, RevenueCat's server API.
+    /// The secrets stay in Supabase; the user's session token is how each
+    /// function knows who's asking. The caller sets the body.
+    func edgeFunctionRequest(_ name: String) async throws -> URLRequest {
+        guard let functionsBaseURL else { throw EdgeFunctionError.notConfigured }
+        guard let accessToken = await currentAccessToken() else { throw EdgeFunctionError.notAuthenticated }
+
+        var request = URLRequest(url: functionsBaseURL.appendingPathComponent(name))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     /// Sign in with email and password.
@@ -555,6 +576,22 @@ struct DailyUsageSummary: Codable {
         case workoutsGeneratedToday = "workouts_generated_today"
         case briefingsToday         = "briefings_today"
         case totalCostTodayUsd      = "total_cost_today_usd"
+    }
+}
+
+// MARK: - EdgeFunctionError
+
+enum EdgeFunctionError: LocalizedError {
+    case notConfigured
+    case notAuthenticated
+
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured:
+            return "Supabase isn't configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to Secrets.xcconfig."
+        case .notAuthenticated:
+            return "You're not signed in — sign in to talk to Kai."
+        }
     }
 }
 

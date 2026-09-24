@@ -110,47 +110,21 @@ final class ClaudeAPIClient {
 
     // MARK: - Configuration
 
-    /// Every call goes through the claude-chat Supabase Edge Function, not
-    /// api.anthropic.com directly — the Anthropic key lives there as a
-    /// server-side secret and never ships inside this app. Previously the
-    /// raw key shipped in every installed copy of the app (Bundle.main's
-    /// CLAUDE_API_KEY), extractable from the IPA by anyone, with no
-    /// per-user attribution and no way to stop them calling Claude
-    /// directly with it, unlimited, billed to this app's own account.
-    private let functionURL: URL?
-    private let anonKey: String
-
     private let urlSession: URLSession
 
     init() {
-        let supabaseURL = Bundle.main.infoDictionary?["SUPABASE_URL"] as? String ?? ""
-        self.functionURL = URL(string: "\(supabaseURL)/functions/v1/claude-chat")
-        self.anonKey = Bundle.main.infoDictionary?["SUPABASE_ANON_KEY"] as? String ?? ""
-
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         self.urlSession = URLSession(configuration: config)
     }
 
-    /// The claude-chat function verifies this session's JWT itself (Supabase's
-    /// function gateway rejects anything else before our code even runs) —
-    /// this is what lets it know *which* user is calling, so it can re-check
-    /// UsageGate's free-tier limit server-side, where a client can't be
-    /// tricked into skipping it. Same reasoning as send-push's auth model.
+    /// Every call goes through the claude-chat Edge Function
+    /// (supabase/functions/claude-chat), which holds the Anthropic key
+    /// server-side and re-checks the free-tier limit against the caller's
+    /// verified session. The key never ships inside the app.
     private func makeRequest() async throws -> URLRequest {
-        guard let functionURL, !anonKey.isEmpty else {
-            throw ClaudeAPIError.notConfigured
-        }
-        guard let accessToken = await ForzeeDataService.shared.currentAccessToken() else {
-            throw ClaudeAPIError.notAuthenticated
-        }
-        var request = URLRequest(url: functionURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        return request
+        try await ForzeeDataService.shared.edgeFunctionRequest("claude-chat")
     }
 
     // MARK: - Streaming Completion
@@ -786,8 +760,6 @@ enum StreamedAutoToolResult {
 // MARK: - ClaudeAPIError
 
 enum ClaudeAPIError: LocalizedError {
-    case notConfigured
-    case notAuthenticated
     case invalidResponse
     case malformedResponse
     case unauthorized
@@ -797,10 +769,6 @@ enum ClaudeAPIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured:
-            return "Supabase isn't configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to Secrets.xcconfig."
-        case .notAuthenticated:
-            return "You're not signed in — sign in to talk to Kai."
         case .unauthorized:
             return "The claude-chat function rejected this session. Try signing in again."
         case .rateLimited:

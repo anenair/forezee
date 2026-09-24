@@ -2,11 +2,14 @@
 // PurchaseManager.swift
 // Forzee — Core/Billing
 //
-// Phase 2: wraps RevenueCat for the premium paywall. Syncs the
-// resolved entitlement into AppState.subscriptionTier and mirrors
-// it to the Supabase `profiles.subscription_tier` column so
-// UsageGate and Kai's context snapshot both see it without a
-// second network call.
+// Phase 2: wraps RevenueCat for the premium paywall. Reflects the
+// resolved entitlement in AppState.subscriptionTier for the UI, and
+// asks the sync-subscription Edge Function to update
+// `profiles.subscription_tier`. The app can't write that column
+// itself (see protect_subscription_columns in forzee_schema.sql) —
+// otherwise anyone could grant themselves premium. The function
+// asks RevenueCat directly, keyed on the Supabase user id that
+// identify(userId:) logs in with.
 //
 // Entitlement identifier expected in RevenueCat: "premium"
 //
@@ -55,6 +58,25 @@ final class PurchaseManager: NSObject, ObservableObject {
             return
         }
         Purchases.shared.delegate = self
+    }
+
+    // MARK: - Identity
+
+    /// Ties RevenueCat's customer record to the Supabase user, so
+    /// sync-subscription can look purchases up by that id server-side.
+    /// Call after every sign-in or session restore. logIn also moves any
+    /// purchase made while anonymous onto this user.
+    func identify(userId: String) async {
+        guard isAvailable else { return }
+        _ = try? await Purchases.shared.logIn(userId)
+        await refreshCustomerInfo(userId: userId)
+    }
+
+    /// Call on sign-out so the next user on this device doesn't inherit
+    /// this one's purchases.
+    func resetIdentity() async {
+        guard isAvailable, !Purchases.shared.isAnonymous else { return }
+        _ = try? await Purchases.shared.logOut()
     }
 
     // MARK: - Offerings
@@ -130,11 +152,16 @@ final class PurchaseManager: NSObject, ObservableObject {
 
         AppState.shared?.subscriptionTier = tier
 
-        guard let userId else { return }
-        try? await ForzeeDataService.shared.updateProfile(
-            ["subscription_tier": tier.rawValue],
-            userId: userId
-        )
+        guard userId != nil else { return }
+        await requestServerSync()
+    }
+
+    /// Best-effort: the server stays on its last-known tier if this fails,
+    /// and the next launch or purchase retries it.
+    private func requestServerSync() async {
+        guard var request = try? await ForzeeDataService.shared.edgeFunctionRequest("sync-subscription") else { return }
+        request.httpBody = Data("{}".utf8)
+        _ = try? await URLSession.shared.data(for: request)
     }
 }
 

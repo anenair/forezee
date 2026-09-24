@@ -20,3 +20,12 @@ verify_jwt = true
 # function knows which user is asking and re-checks their free-tier
 # limit server-side. See claude-chat/index.ts.
 verify_jwt = true
+
+[functions.kai-voice]
+# Same reason — the verified session is how it checks the caller is premium.
+verify_jwt = true
+
+[functions.sync-subscription]
+# Same reason — the verified session decides whose subscription to sync;
+# a caller can never sync (or write) anyone else's.
+verify_jwt = true

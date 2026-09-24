@@ -74,6 +74,7 @@ final class AppState: ObservableObject {
                     self.userId = userId
                     self.isAuthenticated = true
                     await self.loadProfile(userId: userId)
+                    await PurchaseManager.shared.identify(userId: userId)
                 }
             }
         }
@@ -105,11 +106,13 @@ final class AppState: ObservableObject {
         self.userId = userId
         self.isAuthenticated = true
         await loadProfile(userId: userId)
+        await PurchaseManager.shared.identify(userId: userId)
     }
 
     // MARK: - Sign Out
 
     func signOut() async {
+        await PurchaseManager.shared.resetIdentity()
         await ForzeeDataService.shared.signOut()
         NotificationManager.shared.cancelAll()
         isAuthenticated = false
